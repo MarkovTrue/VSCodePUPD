@@ -1,6 +1,6 @@
 # <img src="Assets/HeaderIcon.png" alt="Logo" width="28" align="absmiddle"/>&nbsp; VSCodePUPD
 
-[![Release](https://img.shields.io/github/v/release/MarkovTrue/VSCodePUPD?label=Release&color=%238a2be2&logo=starship&logoColor=white)](https://github.com/MarkovTrue/VSCodePUPD/releases) [![Downloads](https://img.shields.io/github/downloads/MarkovTrue/VSCodePUPD/total?label=Downloads&color=%238a2be2&logo=github&logoColor=white)](https://github.com/MarkovTrue/VSCodePUPD/releases)
+[![Release](https://img.shields.io/github/v/release/MarkovTrue/VSCodePUPD?label=Release&color=%238a2be2&logo=starship&logoColor=white)](https://github.com/MarkovTrue/VSCodePUPD/releases) [![Downloads](https://img.shields.io/github/downloads/MarkovTrue/VSCodePUPD/total?label=Downloads&color=%230078D4&logo=github&logoColor=white)](https://github.com/MarkovTrue/VSCodePUPD/releases)
 
 Портативный [Visual Studio Code](https://code.visualstudio.com/docs/setup/portable) не умеет обновляться автоматически.
 VS Code Portable Updater берет на себя эту рутину.
