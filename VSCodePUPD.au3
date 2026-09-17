@@ -2,24 +2,14 @@
 #pragma compile(Icon, Assets\Icon.ico)
 #pragma compile(ProductName, VSCodePUPD)
 #pragma compile(FileDescription, Launcher and updater for portable VS Code)
-#pragma compile(FileVersion, 1.0.2.0)
-; Разрядность закреплена: _ProcessCwd читает PEB чужого процесса по смещениям x64,
-; из 32-битной сборки они указывают не туда
+#pragma compile(FileVersion, 1.0.3.0)
+; x64 обязательно: _ProcessCwd читает PEB чужого процесса по смещениям x64
 #pragma compile(x64, true)
 
 #NoTrayIcon
 
-#include <AutoItConstants.au3>
-#include <Date.au3>
-#include <FileConstants.au3>
 #include <GUIConstantsEx.au3>
-#include <InetConstants.au3>
 #include <MsgBoxConstants.au3>
-#include <SendMessage.au3>
-#include <StaticConstants.au3>
-#include <WinAPI.au3>
-#include <WinAPIFiles.au3>
-#include <WinAPIGdi.au3>
 #include <WindowsConstants.au3>
 
 #include "Include/Archive.au3"
@@ -37,14 +27,14 @@ Opt("MustDeclareVars", 1)
 ; Константы
 ; ============================================================
 
-; Строки окна настройки: участвуют в расчёте ширины окна, поэтому нужны заранее
+; Префикс строки о папке данных: входит в расчёт ширины окна первого запуска
 Global Const $gc_sDataPrefix = "Папка пользователя: "
 
-; Запас поверх размера архива: распакованная сборка примерно вдвое больше,
+; Запас места поверх размера архива: распакованная сборка примерно вдвое больше,
 ; и обе версии какое-то время лежат на диске одновременно
 Global Const $gc_nSpaceFactor = 3.5
 
-Global Const $gc_iCheckTimeout = 4000 ; мс: дольше ждать нельзя, лаунчер стоит перед запуском редактора
+Global Const $gc_iCheckTimeout = 4000 ; мс: лаунчер стоит перед запуском редактора
 
 ; ============================================================
 ; Глобальные переменные
@@ -59,11 +49,10 @@ Global $g_iSetupBrowse = 0, $g_iSetupSave = 0, $g_iSetupCancel = 0
 ; ============================================================
 
 _ParseCmdLine()
-; Запущенный из терминала VS Code лаунчер получает рабочий каталог внутри
-; обновляемой папки и держал бы её сам - уводим себя к своему exe
+; Из терминала VS Code рабочий каталог достаётся внутри обновляемой папки и держал бы её
 FileChangeDir(@ScriptDir)
 _Util_LogStart($gc_sLogFile, $gc_sTitle & " запуск" & ($g_bSilent ? " (/silent)" : ""))
-_LoadConfig() ; внутри же разбирается с последствиями прерванного прогона
+_LoadConfig()
 _BuildSteps()
 
 $g_sVerCur = _GetVSCodeVers()
@@ -79,14 +68,14 @@ Exit
 ; Сценарий лаунчера
 ; ============================================================
 
-; Проверка обновления в маленьком окне, при наличии - вопрос и переход в основное окно.
+; Проверка обновления в первом окне, при согласии - обновление во втором.
 Func _RunLauncherFlow()
 	_StartGUI()
 
 	Local $aUpd = _Net_CheckUpdate($gc_sUpdateApi, $gc_iCheckTimeout, "_StartPulse")
 	Local $iErr = @error
 	If $iErr Then
-		; ссылка на чужой хост - это не сбой сети, о таком надо сказать прямо
+		; чужой хост - не сбой сети, об этом говорим прямо
 		If $iErr = 4 Then Return _StartDone("ОТКАЗ: сервер вернул ссылку на неизвестный хост", _
 				"Ссылка не от Microsoft", "Обновление отменено, запуск " & $g_sVerCur & "...")
 
@@ -101,9 +90,9 @@ Func _RunLauncherFlow()
 	_Util_Log("Сервер предлагает " & $g_sVerNew)
 
 	If _CompareVersions($g_sVerNew, $g_sVerCur) <= 0 Then Return _StartDone("", _
-			"Установлена последняя версия " & $g_sVerCur, "Запуск VS Code...", 700, $gc_iClrOk)
+			"У вас установлена последняя версия " & $g_sVerCur, "Запуск VS Code...", 100, $gc_iClrText)
 
-	; Свой же процесс удержит папку от удаления, если программа лежит внутри неё
+	; Свой же процесс не дал бы удалить папку, в которой лежит программа
 	If _Util_IsInsidePath(@ScriptDir, $g_sTargetPath) Then Return _StartDone( _
 			"ОТКАЗ: программа лежит внутри обновляемой папки", _
 			"Обновление невозможно", "VSCodePUPD лежит внутри папки VS Code")
@@ -111,37 +100,34 @@ Func _RunLauncherFlow()
 	$g_sZipFile = $g_sWorkDir & "\" & _Util_FileName($g_sUrl)
 	$g_iZipSize = _Net_GetRemoteSize($g_sUrl, 5000, "_StartPulse")
 
-	; Места должно хватить и на архив, и на обе версии рядом
 	Local $sSpace = _CheckFreeSpace()
 	If $sSpace <> "" Then Return _StartDone("ОТКАЗ: " & $sSpace, _
 			"Не хватает места на диске", $sSpace, 3000)
 
 	If Not _AskAndFreeFolder() Then Return _StartClose()
 
-	; Второе окно поднимаем до того, как убрать первое: иначе между ними
-	; проскакивает голый рабочий стол
+	; Второе окно - до того, как убрать первое: иначе между ними мелькнёт рабочий стол
 	_MainGUI()
 	_StartClose()
 	_RunUpdate()
 EndFunc   ;==>_RunLauncherFlow
 
 
-; Хватит ли места на архив и на обе версии VS Code рядом.
+; Хватит ли места на архив и обе версии VS Code рядом.
 ; '' - хватает или проверить не удалось, иначе текст для показа.
 Func _CheckFreeSpace()
 	If $g_iZipSize <= 0 Then Return ""
 
 	Local $nNeed = $g_iZipSize * $gc_nSpaceFactor
 	Local $nFree = _Util_FreeSpace($g_sWorkDir)
-	If $nFree < 0 Then Return "" ; сетевой путь или том не определился, мешать не будем
+	If $nFree < 0 Then Return "" ; сетевой путь или том не определился - не мешаем
 
 	If $nFree >= $nNeed Then Return ""
 	Return "нужно около " & _FormatSize($nNeed) & ", свободно " & _FormatSize($nFree)
 EndFunc   ;==>_CheckFreeSpace
 
 
-; Полный цикл обновления в основном окне. Каждый шаг сам двигает общий прогресс.
-; Повторы идут циклом, а не рекурсией: раньше каждое 'Повторить' углубляло стек.
+; Обновление в основном окне. Повторы после ошибки - циклом, а не рекурсией: стек не растёт.
 Func _RunUpdate()
 	While 1
 		Local $bRetry = _RunUpdateOnce()
@@ -161,7 +147,7 @@ Func _RunUpdateOnce()
 	_SetStep(0, "done", _ReleaseLine())
 	_SetProgressStep($g_iStepDownload, 0)
 
-	; --- Загрузка и сверка контрольной суммы: один шаг, сумма без своего пункта ---
+	; --- Загрузка и сверка суммы: один шаг ---
 	_SetStep($g_iStepDownload, "run")
 	_SetStatus("Загрузка архива...")
 	_DownloadArchive()
@@ -179,22 +165,25 @@ Func _RunUpdateOnce()
 	If $iHashErr Then Return _FailStep($g_iStepDownload, "Не удалось прочитать архив", "проверьте, не занят ли файл другой программой")
 	If Not $bMatch Then
 		_Util_Log("ОШИБКА: SHA-256 не совпал, архив удалён")
-		FileDelete($g_sZipFile) ; битую докачку продолжать нельзя, начинаем с нуля
+		FileDelete($g_sZipFile) ; битую докачку продолжать нельзя
 		Return _FailStep($g_iStepDownload, "Архив повреждён", "SHA-256 не совпал с ответом сервера, файл удалён")
 	EndIf
 	_SetStep($g_iStepDownload, "done", $g_sDownloadSummary)
 	_Util_Log("Архив загружен и проверен: " & $g_sDownloadSummary)
 
-	; Загрузка идёт минутами, за это время редактор могли успеть запустить,
-	; а занятую папку не переименовать - проверяем ещё раз перед сносом
-	Local $sBusy = _FolderNames(_FolderHolders($g_sTargetPath))
-	If $sBusy <> "" Then Return _FailStep($g_iStepRemove, "Папка VS Code занята", "закройте: " & $sBusy)
+	; За минуты загрузки редактор могли запустить снова. Как и в первом окне,
+	; списка процессов мало - точный ответ даёт проба переименованием.
+	If FileExists($g_sTargetPath) Then
+		Local $aBusy = _FolderHolders($g_sTargetPath)
+		If UBound($aBusy) Or Not _FolderIsFree($g_sTargetPath) Then Return _FailStep($g_iStepRemove, _
+				"Папка VS Code занята", UBound($aBusy) ? "закройте: " & _FolderNames($aBusy) : "её удерживает программа, которую не видно")
+	EndIf
 
-	; С этого места отменять нельзя: папка Data уже уедет из своего места
+	; Дальше отменять нельзя: папки начинают переезжать
 	$g_bCancelLocked = True
 	_SetButtonEnabled($g_iBtnAlt, False)
 
-	; --- Вынос папки данных: только если она лежит внутри каталога VS Code ---
+	; --- Вынос папки данных: только если она внутри каталога VS Code ---
 	Local $sBackup = ""
 	If $g_iStepBackup >= 0 Then
 		_SetStep($g_iStepBackup, "run")
@@ -224,9 +213,8 @@ Func _RunUpdateOnce()
 	_SetStep($g_iStepUnpack, "run")
 	_SetStatus("Распаковка архива...")
 	If Not _UnpackArchive() Then
-		; Возвращать данные в наполовину распакованный каталог нельзя: следующая
-		; попытка распаковки перемешает их с новой сборкой. Бэкап остаётся на месте,
-		; путь к нему записан в ini и подхватится при следующем запуске.
+		; В наполовину распакованный каталог данные не возвращаем: следующая распаковка
+		; перемешала бы их с новой сборкой. Их подхватит повтор или следующий запуск по ini.
 		_Util_Log("ОШИБКА: распаковка не удалась, бэкап оставлен в '" & $sBackup & "'")
 		Return _FailStep($g_iStepUnpack, "Ошибка распаковки", _
 				($sBackup = "") ? "восстановите VS Code из корзины" : "данные ждут в '" & _Util_FileName($sBackup) & "'")
@@ -245,7 +233,7 @@ Func _RunUpdateOnce()
 		_SetStep($g_iStepRestore, "done", ($sBackup = "") ? "" : _FitPath($g_aStepSub[$g_iStepRestore], $g_sDataPath))
 	EndIf
 
-	; --- Проверка: своим пунктом не идёт, спрос с распаковки ---
+	; --- Проверка версии: своего пункта нет, спрос с распаковки ---
 	Local $sVerAfter = _GetVSCodeVers()
 	If $sVerAfter = "" Or _CompareVersions($sVerAfter, $g_sVerCur) <= 0 Then
 		_Util_Log("ОШИБКА: после распаковки версия '" & $sVerAfter & "' не новее '" & $g_sVerCur & "'")
@@ -255,6 +243,7 @@ Func _RunUpdateOnce()
 
 	FileRecycle($g_sZipFile)
 	IniDelete($gc_sIniFile, "State")
+	$g_bCancelLocked = False ; иначе 'Закрыть' не нажимается
 	_SetProgress(100)
 	_SetStatus("Обновлено до " & $sVerAfter & ", запуск VS Code...")
 	_LayoutButtons("done")
@@ -267,22 +256,14 @@ EndFunc   ;==>_RunUpdateOnce
 
 
 ; ============================================================
-; Окно держателей папки
-; ============================================================
-
-; ============================================================
-; Занятость папки
-; ============================================================
-
-; ============================================================
 ; Настройки и первый запуск
 ; ============================================================
 
 ; Окно первого запуска: путь к VS Code и что программа поняла про папку данных.
 ; True - настройки сохранены, False - пользователь отказался.
 Func _SetupGUI()
-	Local Const $iMinWidth = 440 ; ниже уже неудобно вводить путь
-	Local $iWidth = 900 ; с запасом: окно ужмётся по факту после замера строк
+	Local Const $iMinWidth = 440 ; уже неудобно вводить путь
+	Local $iWidth = 900 ; с запасом: ужмётся после замера строк
 
 	$g_hSetup = GUICreate($gc_sTitle & " - Первый запуск", $iWidth, 600, -1, -1, _
 			BitOR($WS_POPUP, $WS_CAPTION, $WS_SYSMENU), $WS_EX_TOPMOST)
@@ -290,7 +271,7 @@ Func _SetupGUI()
 	GUISetFont($gc_nFontBody, 400, 0, "Segoe UI", $g_hSetup)
 	_GUISetDarkTitleBar($g_hSetup)
 
-	Local $aLines[0][2] ; [ControlID, текст] - по ним считаем нужную ширину окна
+	Local $aLines[0][2] ; [ControlID, текст] - по ним считаем ширину окна
 	Local $iY = $gc_iPad
 
 	; --- Что это и зачем ---
@@ -301,11 +282,11 @@ Func _SetupGUI()
 	$iY = _SetupBlock($aLines, "VSCodePUPD", $aAbout, $iY)
 
 	; --- Что программа делает с вашими данными ---
-	Local $aSafe[4] = [ _
+	Local $aSafe[3] = [ _
 			"Обновление начинается только по вашей команде. Архив скачивается из", _
 			"официального источника Microsoft. Настройки и расширения переносятся", _
 			"целиком. Старые версии и архивы удаляются только через корзину."]
-	$iY = _SetupBlock($aLines, "Насколько это безопасно", $aSafe, $iY + 10)
+	$iY = _SetupBlock($aLines, "Насколько это безопасно", $aSafe, $iY + 10) + 18
 
 	; --- Папка VS Code ---
 	_SetupAddLine($aLines, _DarkLabel("Папка VS Code", $gc_iPad, $iY, 400, 20, $gc_iClrText), "Папка VS Code")
@@ -315,7 +296,7 @@ Func _SetupGUI()
 	GUICtrlSetBkColor($g_iSetupInput, 0x2D2D2D)
 	GUICtrlSetColor($g_iSetupInput, $gc_iClrText)
 	GUICtrlSetFont($g_iSetupInput, $gc_nFontBody, 400, 0, "Segoe UI")
-	$g_iSetupBrowse = _DarkButton("Обзор...", $gc_iPad, $iY) ; встанет по правому краю после замера
+	$g_iSetupBrowse = _DarkButton("Обзор...", $gc_iPad, $iY) ; к правому краю после замера
 	Local $iInputTop = $iY
 	$iY += $gc_iBtnHeight + 14
 
@@ -325,7 +306,7 @@ Func _SetupGUI()
 	$g_iSetupSave = _DarkButton("Применить", $gc_iPad, $iY, True)
 	$g_iSetupCancel = _DarkButton("Отмена", $gc_iPad, $iY)
 
-	; Эти строки появятся позже, но окно не должно из-за них обрезать текст
+	; Строка о папке данных заполнится позже, но в ширину окна закладывается сейчас
 	Local $aData = _DetectDataPath($g_sTargetPath)
 	_SetupAddLine($aLines, $g_iSetupData, $gc_sDataPrefix & $aData[0])
 
@@ -336,7 +317,7 @@ Func _SetupGUI()
 		If $iLine > $iTextWidth Then $iTextWidth = $iLine
 	Next
 
-	$iTextWidth += 30 ; немного воздуха справа, иначе текст упирается в край
+	$iTextWidth += 30 ; воздух справа
 	$iWidth = $iTextWidth + 2 * $gc_iPad
 	Local $iHeight = $iY + $gc_iBtnHeight + $gc_iPad
 	_ResizeClient($g_hSetup, $iWidth, $iHeight)
@@ -348,8 +329,6 @@ Func _SetupGUI()
 
 	GUICtrlSetPos($g_iSetupInput, $gc_iPad, $iInputTop, $iTextWidth - $gc_iBtnMinWidth - $gc_iBtnGap, $gc_iBtnHeight)
 	GUICtrlSetPos($g_iSetupBrowse, $iWidth - $gc_iPad - $gc_iBtnMinWidth, $iInputTop, $gc_iBtnMinWidth, $gc_iBtnHeight)
-	Local $aDataPos = ControlGetPos($g_hSetup, "", $g_iSetupData)
-	GUICtrlSetPos($g_iSetupData, $gc_iPad, $aDataPos[1], $iTextWidth, 20)
 	_PlaceButtons($iWidth - $gc_iPad, $iY, $g_iSetupSave, $g_iSetupCancel)
 
 	GUISetOnEvent($GUI_EVENT_CLOSE, "_OnEvent_SetupCancel", $g_hSetup)
@@ -360,21 +339,22 @@ Func _SetupGUI()
 	_SetupRefresh()
 	GUISetState(@SW_SHOW, $g_hSetup)
 
-	; Путь можно и вписать руками, событий об этом Input не шлёт - следим сами
+	; Вписанный руками путь Input событием не сообщает - следим сами
 	Local $sLast = GUICtrlRead($g_iSetupInput)
 	$g_iChoice = 0
 	While $g_iChoice = 0
 		Sleep(30)
 		_UpdateHover($g_hSetup)
-		If GUICtrlRead($g_iSetupInput) <> $sLast Then
-			$sLast = GUICtrlRead($g_iSetupInput)
+		Local $sNow = GUICtrlRead($g_iSetupInput)
+		If $sNow <> $sLast Then
+			$sLast = $sNow
 			_SetupRefresh()
 		EndIf
 	WEnd
 
 	Local $bSaved = ($g_iChoice = 1)
 	If $bSaved Then
-		$g_sTargetPath = GUICtrlRead($g_iSetupInput)
+		$g_sTargetPath = _Util_TrimPath(GUICtrlRead($g_iSetupInput))
 		IniWrite($gc_sIniFile, "Paths", "TargetPath", $g_sTargetPath)
 	EndIf
 
@@ -407,7 +387,7 @@ Func _SetupBlock(ByRef $aLines, $sTitle, ByRef $aText, $iY)
 EndFunc   ;==>_SetupBlock
 
 
-; Запоминает строку, чтобы потом померить её ширину и подогнать окно
+; Запоминает строку для замера ширины окна
 Func _SetupAddLine(ByRef $aLines, $iCtrl, $sText)
 	Local $iIndex = UBound($aLines)
 	ReDim $aLines[$iIndex + 1][2]
@@ -416,9 +396,9 @@ Func _SetupAddLine(ByRef $aLines, $iCtrl, $sText)
 EndFunc   ;==>_SetupAddLine
 
 
-; Пересчитывает строку о папке данных под текущий путь в поле ввода
+; Строка о папке данных под текущий путь в поле ввода
 Func _SetupRefresh()
-	Local $sPath = StringStripWS(GUICtrlRead($g_iSetupInput), 3)
+	Local $sPath = _Util_TrimPath(GUICtrlRead($g_iSetupInput))
 
 	If Not _IsVSCodeFolder($sPath) Then
 		GUICtrlSetData($g_iSetupData, "Code.exe в этой папке не найден")
@@ -457,29 +437,26 @@ Func _OnEvent_SetupCancel()
 	$g_iChoice = 2
 EndFunc   ;==>_OnEvent_SetupCancel
 
-; Читает пути из ini рядом с программой. Если настроек нет или папка не годится,
-; показывает окно первого запуска.
+
+; Пути из ini рядом с программой. Нет настроек или папка не годится - окно первого запуска.
 Func _LoadConfig()
-	Local $sSaved = IniRead($gc_sIniFile, "Paths", "TargetPath", "")
+	Local $sSaved = _Util_TrimPath(IniRead($gc_sIniFile, "Paths", "TargetPath", ""))
 	$g_sTargetPath = ($sSaved <> "") ? $sSaved : _GuessTargetPath()
 
-	; Прерванный прогон разбираем до _ApplyPaths: вынесенная папка данных сбивает
-	; определение их места, и возврат ушёл бы не туда
+	; Прерванный прогон - до _ApplyPaths: вынесенная папка данных сбивает определение их места
 	_RecoverInterrupted()
 
-	; Окно первого запуска показываем и когда папка найдена сама: человек должен
-	; увидеть, что именно программа собралась обновлять, и подтвердить это.
+	; Окно показываем и когда папка нашлась сама: человек должен подтвердить, что обновляется
 	If $sSaved = "" Or Not _IsVSCodeFolder($g_sTargetPath) Then
-		; В тихом режиме окон не показываем: разбираться будет _LaunchVSCode
-		If $g_bSilent Then Return _ApplyPaths()
-		If Not _SetupGUI() Then Exit ; отказались - обновлять нечего
+		If $g_bSilent Then Return _ApplyPaths() ; без окон: разбираться будет _LaunchVSCode
+		If Not _SetupGUI() Then Exit
 	EndIf
 
 	_ApplyPaths()
 EndFunc   ;==>_LoadConfig
 
 
-; Достраивает производные пути от выбранной папки VS Code
+; Производные пути от выбранной папки VS Code
 Func _ApplyPaths()
 	$g_sCodeExe = $g_sTargetPath & "\Code.exe"
 	$g_sWorkDir = IniRead($gc_sIniFile, "Paths", "WorkDir", "")
@@ -491,27 +468,24 @@ Func _ApplyPaths()
 EndFunc   ;==>_ApplyPaths
 
 
-; Где VS Code держит настройки и расширения. Возвращает [путь, вид]:
-;   inside       - папка data внутри каталога VS Code, при обновлении её надо уносить
-;   portable-env - путь задан переменной VSCODE_PORTABLE, каталог обновления её не трогает
-;   profile      - обычная установка: %APPDATA%\Code, обновление архива её не затрагивает
+; Где VS Code держит настройки и расширения: [путь, вид].
+;   inside       - внутри каталога VS Code, при обновлении её уносим
+;   portable-env - VSCODE_PORTABLE снаружи, обновление её не трогает
+;   profile      - %APPDATA%\Code, обновление её не трогает
 Func _DetectDataPath($sTarget)
 	Local $aResult[2]
 	Local $sEnv = EnvGet("VSCODE_PORTABLE")
 	Local $bEnv = ($sEnv <> "" And FileExists($sEnv))
 
-	; Переменная, указывающая внутрь обновляемой папки - это её собственные данные
 	If $bEnv And _Util_IsInsidePath($sEnv, $sTarget) Then
 		$aResult[0] = $sEnv
 		$aResult[1] = "inside"
 		Return $aResult
 	EndIf
 
-	; Дальше папка data важнее переменной, хотя сам VS Code решает наоборот.
-	; Причина в том, что переменная описывает ЗАПУЩЕННЫЙ экземпляр и легко
-	; достаётся по наследству: запусти лаунчер из терминала VS Code - и он
-	; получит чужой VSCODE_PORTABLE. Поверь мы ему, данные обновляемой сборки
-	; остались бы неопознанными и уехали в корзину вместе со старой версией.
+	; Дальше папка data главнее переменной, хотя сам VS Code решает наоборот: переменная
+	; достаётся по наследству от запущенного редактора и может указывать на чужие данные.
+	; Поверь мы ей, данные этой сборки уехали бы в корзину вместе со старой версией.
 	Local $sInside = $sTarget & "\data"
 	If FileExists($sInside) Then
 		$aResult[0] = $sInside
@@ -536,12 +510,9 @@ Func _IsVSCodeFolder($sPath)
 EndFunc   ;==>_IsVSCodeFolder
 
 
-; Разумное предположение до первой настройки: рядом с программой, затем привычный путь
+; Догадка до первой настройки: папка программы, 'VS Code' в ней, 'VS Code' по соседству
 Func _GuessTargetPath()
-	Local $aTry[3] = [ _
-			@ScriptDir, _                                   ; программа лежит прямо в папке VS Code
-			@ScriptDir & "\VS Code", _                      ; папка VS Code рядом с программой
-			_Util_ParentDir(@ScriptDir) & "\VS Code"]            ; программа в соседней папке
+	Local $aTry[3] = [@ScriptDir, @ScriptDir & "\VS Code", _Util_ParentDir(@ScriptDir) & "\VS Code"]
 
 	For $i = 0 To UBound($aTry) - 1
 		If _IsVSCodeFolder($aTry[$i]) Then Return $aTry[$i]
@@ -552,22 +523,13 @@ EndFunc   ;==>_GuessTargetPath
 
 
 ; ============================================================
-; Сеть
+; Загрузка и распаковка
 ; ============================================================
 
-
-
-
-
-
-
-
-
-; Загрузка архива силами модуля: сюда сведены колбэки прогресса и отмены.
-; @error пробрасывается наружу без изменений.
+; Загрузка с колбэками окна. @error пробрасывается без изменений.
 Func _DownloadArchive()
 	If Not FileExists($g_sWorkDir) Then DirCreate($g_sWorkDir)
-	If Not FileExists($g_sWorkDir) Then Return SetError(4, 0, 0) ; папку не создать, качать некуда
+	If Not FileExists($g_sWorkDir) Then Return SetError(4, 0, 0) ; качать некуда
 
 	Local $nSeconds = _Net_Download($g_sUrl, $g_sZipFile, $g_iZipSize, "_OnDownloadProgress", "_IsAborted")
 	Local $iErr = @error
@@ -576,7 +538,7 @@ Func _DownloadArchive()
 		Return SetError($iErr, @extended, 0)
 	EndIf
 
-	; размер сервер мог не сообщить - тогда берём фактический размер файла
+	; размер сервер мог не сообщить - тогда берём фактический
 	Local $iSize = ($g_iZipSize > 0) ? $g_iZipSize : _Util_FileSizeLive($g_sZipFile)
 	$g_sDownloadSummary = ($nSeconds > 0) _
 			? _FormatSize($iSize) & " за " & _FormatTime($nSeconds, False) _
@@ -585,7 +547,6 @@ Func _DownloadArchive()
 EndFunc   ;==>_DownloadArchive
 
 
-; Распаковка силами модуля, прогресс и отмена - теми же колбэками
 Func _UnpackArchive()
 	Local $aResult = _Arc_Unpack(@ScriptDir & "\Apps\7z.exe", $g_sZipFile, $g_sTargetPath, _
 			"_OnUnpackProgress", "_IsAborted")
@@ -600,42 +561,46 @@ Func _UnpackArchive()
 EndFunc   ;==>_UnpackArchive
 
 
+; Колбэки прогресса. Подсветку кнопок держит _IsAborted: модули зовут его на каждом круге.
 Func _OnUnpackProgress($iDone, $iExpected)
-	_UpdateHover($g_hMain)
 	_SetProgressStep($g_iStepUnpack, $iDone / $iExpected)
 	_SetStatus("Распаковка архива...", False, _FormatSizePair($iDone, $iExpected))
 EndFunc   ;==>_OnUnpackProgress
 
 
-; Сверка суммы - часть шага загрузки, поэтому общую полосу не двигает:
-; показываем только проценты в строке состояния, чтобы окно не выглядело зависшим.
+; Сверка - последняя доля шага загрузки ($gc_nHashShare). Блоков сотни, а видно
+; только проценты: окно трогаем при их смене, втрое реже.
 Func _OnHashProgress($iDone, $iTotal)
-	_UpdateHover($g_hMain)
 	If $iTotal <= 0 Then Return
-	_SetStatus("Проверка контрольной суммы...", False, Int($iDone / $iTotal * 100) & " %")
+
+	Local Static $iShown = -1
+	Local $iPercent = Int($iDone / $iTotal * 100)
+	If $iPercent = $iShown Then Return
+	$iShown = $iPercent
+
+	_SetProgressStep($g_iStepDownload, 1 - $gc_nHashShare + $gc_nHashShare * $iDone / $iTotal)
+	_SetStatus("Проверка контрольной суммы...", False, $iPercent & " %")
 EndFunc   ;==>_OnHashProgress
 
 
-; Модули спрашивают об отмене этим колбэком
 Func _IsAborted()
 	_UpdateHover($g_hMain)
 	Return $g_bCancel
 EndFunc   ;==>_IsAborted
 
 
-; Подстрочник шага загрузки: сколько скачано, скорость, остаток времени.
+; Подстрочник загрузки: сколько скачано, скорость, сколько осталось
 Func _OnDownloadProgress($iDone, $nSpeed)
-	Local $sDot = "  " & ChrW(0x2022) & "  "
 	Local $sText = _FormatSize($iDone)
 	If $g_iZipSize > 0 Then
 		$sText = _FormatSizePair($iDone, $g_iZipSize)
-		_SetProgressStep($g_iStepDownload, $iDone / $g_iZipSize)
+		_SetProgressStep($g_iStepDownload, $iDone / $g_iZipSize * (1 - $gc_nHashShare))
 	EndIf
 
 	If $nSpeed > 1024 Then
-		$sText &= $sDot & _FormatSize($nSpeed) & "/с"
+		$sText &= $gc_sDot & _FormatSize($nSpeed) & "/с"
 		If $g_iZipSize > $iDone Then
-			$sText &= $sDot & "осталось " & _FormatTime(($g_iZipSize - $iDone) / $nSpeed)
+			$sText &= $gc_sDot & "осталось " & _FormatTime(($g_iZipSize - $iDone) / $nSpeed)
 		EndIf
 	EndIf
 
@@ -643,15 +608,14 @@ Func _OnDownloadProgress($iDone, $nSpeed)
 EndFunc   ;==>_OnDownloadProgress
 
 
-
-
 ; ============================================================
 ; Файловые операции
 ; ============================================================
+; DirMove, FileRecycle и FileDelete при неудаче @error не ставят - проверяем возврат.
+; DirMove без $FC_OVERWRITE: с ним в существующую папку источник молча вкладывается внутрь.
 
-; Читает версию VS Code из файловой версии Code.exe, '1.134.0.0' → '1.134.0'.
-; '' - прочитать не удалось. Раньше здесь был MsgBox и Exit, но после удачной
-; распаковки такой выход бросал пользователя без запущенного редактора.
+; Версия VS Code из файловой версии Code.exe: '1.134.0.0' → '1.134.0', '' - не прочитать.
+; Без выхода по ошибке: после удачной распаковки он оставил бы человека без редактора.
 Func _GetVSCodeVers()
 	Local $sVers = FileGetVersion($g_sCodeExe)
 	If @error Or $sVers = "" Then Return ""
@@ -659,38 +623,28 @@ Func _GetVSCodeVers()
 EndFunc   ;==>_GetVSCodeVers
 
 
-; Выносит папку Data за пределы каталога VS Code. Возвращает путь к вынесенной папке
-; ('' - папки не было). При @error в возврате - текст ошибки для показа.
-;
-; DirMove при неудаче возвращает 0 и НЕ ставит @error, поэтому проверяем возврат.
-; Раньше провал переноса оставался незамеченным, и следующий шаг отправлял
-; настройки пользователя в корзину вместе со старой версией.
+; Выносит папку данных за пределы каталога VS Code. Возвращает путь выноса,
+; '' - папки не было, при @error - текст ошибки для показа.
 Func _BackupUserData()
-	If Not FileExists($g_sDataPath) Then Return ""
+	If Not FileExists($g_sDataPath) Then
+		; Повтор после сбоя: папку уже вынес прошлый проход, она ждёт по метке в ini.
+		; Без этого повтор решил бы, что папки нет, и снял метку в конце.
+		Local $sPrev = IniRead($gc_sIniFile, "State", "BackupPath", "")
+		If $sPrev <> "" And FileExists($sPrev) And IniRead($gc_sIniFile, "State", "DataPath", "") = $g_sDataPath Then Return $sPrev
+		Return ""
+	EndIf
 
-	Local $sBase = _Util_ParentDir($g_sTargetPath) & "\VSCodeUserData " & @MDAY & "." & @MON & "." & StringRight(@YEAR, 2)
-	Local $sBackup = $sBase
+	Local $sBackup = _Util_FreeName(_Util_ParentDir($g_sTargetPath) & "\VSCodeUserData " & _DateShort())
 
-	; за один день можно обновиться дважды: тогда рядом появится '... 2', '... 3'
-	For $i = 2 To 20
-		If Not FileExists($sBackup) Then ExitLoop
-		$sBackup = $sBase & " " & $i
-	Next
+	; Метка - до переноса: оборвись он на середине, папку без неё не найти. Место data пишем
+	; тоже: после выноса её там нет, и заново его не определить.
+	_Util_MarkSet("BackupPath", $sBackup, "DataPath", $g_sDataPath)
 
-	; Метку пишем до переноса: оборвись питание в середине DirMove, папка может
-	; оказаться уже переименованной, и без метки её потом никто не найдёт.
-	; Вместе с путём запоминаем, откуда её взяли: после выноса определить это
-	; заново невозможно, папки data на месте уже нет.
-	IniWrite($gc_sIniFile, "State", "BackupPath", $sBackup)
-	IniWrite($gc_sIniFile, "State", "DataPath", $g_sDataPath)
+	; Внутри тома это переименование: гигабайты уезжают мгновенно
+	If Not DirMove($g_sDataPath, $sBackup) Then
+		_Util_MarkClear("BackupPath", "DataPath")
 
-	; Переименование в пределах тома: 9,6 ГБ уезжают мгновенно, копирования нет
-	If Not DirMove($g_sDataPath, $sBackup, $FC_OVERWRITE) Then
-		IniDelete($gc_sIniFile, "State", "BackupPath")
-		IniDelete($gc_sIniFile, "State", "DataPath")
-
-		; Причина почти всегда одна - папку кто-то держит. Имя виновника полезнее
-		; целевого пути: по нему понятно, что закрывать перед повтором.
+		; Причина почти всегда в держателе: его имя полезнее целевого пути
 		Local $sBusy = _FolderNames(_FolderHolders($g_sDataPath))
 		Return SetError(1, 0, ($sBusy = "") ? "целевой путь: " & $sBackup : "держат папку: " & $sBusy)
 	EndIf
@@ -699,22 +653,20 @@ Func _BackupUserData()
 EndFunc   ;==>_BackupUserData
 
 
+; True - папка данных на месте или возвращать нечего
 Func _RestoreUserData($sBackup)
 	If $sBackup = "" Or Not FileExists($sBackup) Then Return True
 
-	DirCreate($g_sTargetPath)
-	If Not DirMove($sBackup, $g_sDataPath, $FC_OVERWRITE) Then Return False
+	DirCreate(_Util_ParentDir($g_sDataPath))
+	If Not DirMove($sBackup, $g_sDataPath) Then Return False
 
-	IniDelete($gc_sIniFile, "State", "BackupPath")
-	IniDelete($gc_sIniFile, "State", "DataPath")
+	_Util_MarkClear("BackupPath", "DataPath")
 	Return True
 EndFunc   ;==>_RestoreUserData
 
 
-; Разбирается с последствиями прерванного прогона. Вызывается из _LoadConfig
-; до _ApplyPaths: если папку data уже вынесли, _DetectDataPath не найдёт её
-; и решит, что данные лежат в профиле - тогда возврат утащил бы портативные
-; настройки в %APPDATA%. Поэтому и целевой путь, и место данных берём из ini.
+; Последствия прерванного прогона. Зовётся до _ApplyPaths: вынесенную папку data
+; _DetectDataPath уже не найдёт и отправит данные в профиль - поэтому место берём из ini.
 Func _RecoverInterrupted()
 	_RecoverRenamed()
 
@@ -722,40 +674,33 @@ Func _RecoverInterrupted()
 	Local $sDataPath = IniRead($gc_sIniFile, "State", "DataPath", "")
 	If $sBackup = "" Then Return
 
-	If Not FileExists($sBackup) Then ; папку уже вернули или убрали руками
-		IniDelete($gc_sIniFile, "State", "BackupPath")
-		IniDelete($gc_sIniFile, "State", "DataPath")
+	If Not FileExists($sBackup) Then ; вернули или убрали руками
+		_Util_MarkClear("BackupPath", "DataPath")
 		Return
 	EndIf
 
-	If $sDataPath = "" Then Return ; куда возвращать - неизвестно, трогать не станем
+	If $sDataPath = "" Then Return ; куда возвращать - неизвестно, не трогаем
 	_Util_Log("Найден бэкап прерванного прогона: '" & $sBackup & "' → '" & $sDataPath & "'")
 
 	If FileExists($sDataPath) Then
-		; Data уже на месте: вынесенная копия осталась от прерванного прогона
 		Local $iAnswer = MsgBox(BitOR($MB_ICONWARNING, $MB_YESNO), $gc_sTitle, _
 				"После прерванного обновления осталась папка:" & @CR & $sBackup & @CR & @CR & _
 				"Папка данных при этом на месте. Удалить оставшуюся копию в корзину?")
-		If $iAnswer = $IDYES And FileRecycle($sBackup) Then
-			IniDelete($gc_sIniFile, "State", "BackupPath")
-			IniDelete($gc_sIniFile, "State", "DataPath")
-		EndIf
+		If $iAnswer = $IDYES And FileRecycle($sBackup) Then _Util_MarkClear("BackupPath", "DataPath")
 		Return
 	EndIf
 
 	DirCreate(_Util_ParentDir($sDataPath))
-	If DirMove($sBackup, $sDataPath, $FC_OVERWRITE) Then
+	If DirMove($sBackup, $sDataPath) Then
 		_Util_Log("Папка данных возвращена на место")
-		IniDelete($gc_sIniFile, "State", "BackupPath")
-		IniDelete($gc_sIniFile, "State", "DataPath")
+		_Util_MarkClear("BackupPath", "DataPath")
 	Else
 		_Util_Log("ОШИБКА: вернуть папку данных не удалось, метка в ini сохранена")
 	EndIf
 EndFunc   ;==>_RecoverInterrupted
 
 
-; Старая версия успела переименоваться, но в корзину не уехала: возвращаем имя,
-; иначе VS Code выглядит пропавшим, а лаунчер разводит руками.
+; Старая версия переименовалась, но в корзину не уехала: возвращаем имя, иначе VS Code пропал
 Func _RecoverRenamed()
 	Local $sRenamed = IniRead($gc_sIniFile, "State", "RenamedPath", "")
 	Local $sTarget = IniRead($gc_sIniFile, "State", "RenamedFrom", "")
@@ -763,53 +708,40 @@ Func _RecoverRenamed()
 
 	If FileExists($sRenamed) And Not FileExists($sTarget) Then
 		_Util_Log("Возврат переименованной папки: '" & $sRenamed & "' → '" & $sTarget & "'")
-		DirMove($sRenamed, $sTarget, $FC_OVERWRITE)
+		If Not DirMove($sRenamed, $sTarget) Then Return ; метка ждёт следующего запуска
 	EndIf
 
-	IniDelete($gc_sIniFile, "State", "RenamedPath")
-	IniDelete($gc_sIniFile, "State", "RenamedFrom")
+	_Util_MarkClear("RenamedPath", "RenamedFrom")
 EndFunc   ;==>_RecoverRenamed
 
 
-; Переименовывает каталог VS Code с версией и отправляет в корзину.
-; Обе операции возвращают 0 без @error, поэтому проверяем возврат. Если корзина
-; недоступна (съёмный диск, отключённая корзина), папку возвращаем под старым
-; именем: иначе рабочий VS Code остался бы лежать под чужим названием.
+; Переименовывает каталог VS Code с версией в имени и отправляет в корзину.
+; Корзина недоступна (съёмный диск, отключена) - имя возвращаем, иначе рабочий
+; VS Code остался бы под чужим названием.
 Func _RemoveOldVersion()
-	; версия могла не прочитаться - тогда метим папку датой, но не пустотой
-	Local $sMark = ($g_sVerCur = "") ? @MDAY & "." & @MON & "." & StringRight(@YEAR, 2) : $g_sVerCur
-	Local $sRenamed = $g_sTargetPath & " " & $sMark
-	If FileExists($sRenamed) Then FileRecycle($sRenamed)
-	If FileExists($sRenamed) Then $sRenamed &= " " & @HOUR & @MIN ; освободить имя не вышло
+	If Not FileExists($g_sTargetPath) Then Return True ; повтор после сбоя распаковки: сносить нечего
+
+	Local $sRenamed = _Util_FreeName($g_sTargetPath & " " & (($g_sVerCur = "") ? _DateShort() : $g_sVerCur))
 
 	; Метка на случай обрыва между переименованием и корзиной
-	IniWrite($gc_sIniFile, "State", "RenamedPath", $sRenamed)
-	IniWrite($gc_sIniFile, "State", "RenamedFrom", $g_sTargetPath)
-
-	If Not DirMove($g_sTargetPath, $sRenamed, $FC_OVERWRITE) Then
-		IniDelete($gc_sIniFile, "State", "RenamedPath")
-		IniDelete($gc_sIniFile, "State", "RenamedFrom")
+	_Util_MarkSet("RenamedPath", $sRenamed, "RenamedFrom", $g_sTargetPath)
+	If Not DirMove($g_sTargetPath, $sRenamed) Then
+		_Util_MarkClear("RenamedPath", "RenamedFrom")
 		Return False
 	EndIf
 
-	If Not FileRecycle($sRenamed) Then
-		DirMove($sRenamed, $g_sTargetPath, $FC_OVERWRITE) ; откат: имя возвращаем на место
-		IniDelete($gc_sIniFile, "State", "RenamedPath")
-		IniDelete($gc_sIniFile, "State", "RenamedFrom")
-		Return False
+	If FileRecycle($sRenamed) Then
+		_Util_MarkClear("RenamedPath", "RenamedFrom")
+		Return True
 	EndIf
 
-	IniDelete($gc_sIniFile, "State", "RenamedPath")
-	IniDelete($gc_sIniFile, "State", "RenamedFrom")
-	Return True
+	; Не вернулось имя - метка остаётся, его вернёт _RecoverRenamed
+	If DirMove($sRenamed, $g_sTargetPath) Then _Util_MarkClear("RenamedPath", "RenamedFrom")
+	Return False
 EndFunc   ;==>_RemoveOldVersion
 
 
-
-
-
-
-; Запускает VS Code, пробрасывая аргументы командной строки лаунчера.
+; Запускает VS Code с аргументами лаунчера
 Func _LaunchVSCode()
 	If Not FileExists($g_sCodeExe) Then
 		_Util_Log("ОШИБКА: запускать нечего, нет '" & $g_sCodeExe & "'")
@@ -817,8 +749,7 @@ Func _LaunchVSCode()
 		Exit 1
 	EndIf
 
-	; Если лаунчер запустили из терминала самого VS Code, в окружении висит
-	; ELECTRON_RUN_AS_NODE=1 - с ней Code.exe стартует как Node и падает
+	; В терминале VS Code ELECTRON_RUN_AS_NODE=1, с ней Code.exe стартует как Node
 	EnvSet("ELECTRON_RUN_AS_NODE")
 
 	Local $sCmd = '"' & $g_sCodeExe & '"'
@@ -837,9 +768,8 @@ EndFunc   ;==>_LaunchVSCode
 ; Разбор командной строки
 ; ============================================================
 
-; Свои ключи забирает себе, всё остальное уходит в Code.exe как есть.
-; Строку собираем из $CmdLine, а не из $CmdLineRaw: при запуске через AutoIt3.exe
-; в Raw первым идёт путь к самому скрипту и он уехал бы в аргументы редактора.
+; Свои ключи забирает, остальное уходит в Code.exe. Из $CmdLine, а не $CmdLineRaw:
+; при запуске через AutoIt3.exe в Raw первым идёт путь к скрипту.
 Func _ParseCmdLine()
 	Local $sArgs = ""
 
@@ -848,7 +778,7 @@ Func _ParseCmdLine()
 			Case "/silent", "-silent", "--silent"
 				$g_bSilent = True
 			Case Else
-				; кавычки снимаются при разборе, возвращаем их путям с пробелами
+				; кавычки снимаются при разборе, путям с пробелами их возвращаем
 				$sArgs &= (StringInStr($CmdLine[$i], " ") ? '"' & $CmdLine[$i] & '"' : $CmdLine[$i]) & " "
 		EndSwitch
 	Next
@@ -858,18 +788,10 @@ EndFunc   ;==>_ParseCmdLine
 
 
 ; ============================================================
-; Тёмная тема: контролы
-; ============================================================
-
-; ============================================================
-; Отрисовка состояния
-; ============================================================
-
-; ============================================================
 ; Утилиты
 ; ============================================================
 
-; Сравнивает '1.134.0' и '1.135.0' по числам: 1 - первая новее, 0 - равны, -1 - старее.
+; '1.134.0' против '1.135.0' по числам: 1 - первая новее, 0 - равны, -1 - старее.
 Func _CompareVersions($sLeft, $sRight)
 	Local $aLeft = StringSplit($sLeft, ".", 2)
 	Local $aRight = StringSplit($sRight, ".", 2)
@@ -894,28 +816,33 @@ Func _FormatSize($iBytes)
 EndFunc   ;==>_FormatSize
 
 
-; $bRoundUp - для оценки остатка: 'осталось 0 с' выглядит странно, поэтому вверх
-; '84,6 из 319,3 МБ': единицу измерения повторять у обоих чисел незачем
+; '84,6 из 319,3 МБ': одинаковую единицу у первого числа не повторяем
 Func _FormatSizePair($iDone, $iTotal)
-	Local $sTotal = _FormatSize($iTotal)
-	Local $aDone = StringSplit(_FormatSize($iDone), " ", 2)
-	Local $aTotal = StringSplit($sTotal, " ", 2)
+	Local $sDone = _FormatSize($iDone), $sTotal = _FormatSize($iTotal)
+	Local $aDone = StringSplit($sDone, " ", 2), $aTotal = StringSplit($sTotal, " ", 2)
 
 	If UBound($aDone) = 2 And UBound($aTotal) = 2 And $aDone[1] = $aTotal[1] Then Return $aDone[0] & " из " & $sTotal
-	Return _FormatSize($iDone) & " из " & $sTotal
+	Return $sDone & " из " & $sTotal
 EndFunc   ;==>_FormatSizePair
 
 
+; $bRoundUp - для оценки остатка: 'осталось 0 сек' выглядит странно
 Func _FormatTime($nSeconds, $bRoundUp = True)
 	If $nSeconds >= 60 Then Return Int($nSeconds / 60) & " мин " & Int(Mod($nSeconds, 60)) & " сек"
 	Return Int($nSeconds) + ($bRoundUp ? 1 : 0) & " сек"
 EndFunc   ;==>_FormatTime
 
 
-; Разделитель дробной части - запятая, StringFormat в любой локали даёт точку
+; Дробная часть через запятую: StringFormat в любой локали даёт точку
 Func _Decimal($nValue, $iDigits)
 	Return StringReplace(StringFormat("%." & $iDigits & "f", $nValue), ".", ",")
 EndFunc   ;==>_Decimal
+
+
+; Сегодня в виде '17.09.26' - для имён папок
+Func _DateShort()
+	Return @MDAY & "." & @MON & "." & StringRight(@YEAR, 2)
+EndFunc   ;==>_DateShort
 
 
 ; На каком проценте оборвалась загрузка - подстрочник шага при ошибке
@@ -928,11 +855,9 @@ Func _DownloadedPercent()
 EndFunc   ;==>_DownloadedPercent
 
 
-; Сколько уже лежит в недокачанном файле - показываем в вопросе про обновление
+; Сколько лежит в недокачанном файле - для вопроса об обновлении
 Func _DownloadedPart()
 	Local $iSize = _Util_FileSizeLive($g_sZipFile)
 	If $iSize <= 0 Then Return ""
 	Return _FormatSize($iSize)
 EndFunc   ;==>_DownloadedPart
-
-

@@ -9,19 +9,16 @@
 #include "Util.au3"
 
 ; ============================================================
-; Работа с архивом: сверка контрольной суммы и распаковка через 7-Zip CLI.
-; О ходе работы модуль сообщает колбэками, GUI здесь нет.
+; Архив: сверка SHA-256 и распаковка через 7-Zip CLI. GUI не знает,
+; о ходе работы сообщает колбэками.
 ; ============================================================
 
 Global Const $gc_iHashChunk = 1048576 ; байт за чтение: на 150 МБ это 150 тиков прогресса
 
 
-; Сверяет SHA-256 файла с ожидаемым значением. Пустой хеш - проверять нечего.
-; Файл читаем блоками, а не целиком через _Crypt_HashFile: на 150 МБ тот молчит
-; несколько секунд, и окно всё это время не перерисовывается и не отвечает.
-;
-; $sProgressCallback($iDone, $iTotal) - вызывается на каждом блоке.
-; $sAbortCallback() - вернуть True, чтобы прервать сверку.
+; Сверяет SHA-256 файла, пустой хеш - проверять нечего. Блоками, а не _Crypt_HashFile:
+; тот молчит на 150 МБ несколько секунд, и окно всё это время не отвечает.
+; $sProgressCallback($iDone, $iTotal) - на каждом блоке, $sAbortCallback() - True прерывает.
 ; @error: 1 - файл не открылся, 2 - прервано, 3 - хеш не посчитался.
 Func _Arc_VerifySha256($sFile, $sExpectedHash, $sProgressCallback = "", $sAbortCallback = "")
 	If $sExpectedHash = "" Then Return True
@@ -46,6 +43,8 @@ Func _Arc_VerifySha256($sFile, $sExpectedHash, $sProgressCallback = "", $sAbortC
 		$iDone += $gc_iHashChunk
 		If $sProgressCallback <> "" Then Call($sProgressCallback, ($iDone > $iTotal) ? $iTotal : $iDone, $iTotal)
 		If $sAbortCallback <> "" And Call($sAbortCallback) Then
+			; объект хеша закрывает только финальный _Crypt_HashData, до него не дошли
+			DllCall("advapi32.dll", "bool", "CryptDestroyHash", "handle", $hHash)
 			FileClose($hFile)
 			_Crypt_Shutdown()
 			Return SetError(2, 0, False)
@@ -62,10 +61,8 @@ Func _Arc_VerifySha256($sFile, $sExpectedHash, $sProgressCallback = "", $sAbortC
 EndFunc   ;==>_Arc_VerifySha256
 
 
-; Полный размер распакованного содержимого из итоговой строки листинга.
-; Обычный вывод 7-Zip в перенаправленный поток идёт нормально, это только прогресс
-; требует консоли. Слово 'files' в итоговой строке зависит от локали сборки 7-Zip,
-; поэтому опираемся на форму строки, а не на текст. 0 - разобрать не удалось.
+; Размер распакованного содержимого из итоговой строки листинга, 0 - не разобрать.
+; Опираемся на форму строки, а не на слово 'files': оно зависит от локали сборки 7-Zip.
 Func _Arc_UnpackedSize($s7zExe, $sArchive)
 	Local $iPid = Run('"' & $s7zExe & '" l "' & $sArchive & '"', @TempDir, @SW_HIDE, $STDOUT_CHILD)
 	If @error Then Return 0
@@ -77,13 +74,11 @@ Func _Arc_UnpackedSize($s7zExe, $sArchive)
 		$sOut &= $sChunk
 	WEnd
 
-	; Итог идёт последним, после строки из дефисов:
+	; Итог - после последней строки из дефисов (к ней ведёт жадная точка):
 	; '2026-08-24 09:30:23        20806        7701  3 files, 1 folders'
-	; Первое число после отметки времени - полный размер. Жадная точка в начале
-	; уводит к ПОСЛЕДНЕЙ строке-разделителю, а она и отделяет итог.
 	Local $aTail = StringRegExp($sOut, '(?s)^.*[\r\n]-{10,}[^\r\n]*[\r\n]+(.*)$', 1)
 	If Not @error Then
-		; отметку времени убираем, иначе её цифры примут за размер
+		; без отметки времени первое число - полный размер, иначе за размер примут её цифры
 		Local $sTail = StringRegExpReplace($aTail[0], '\d{4}-\d\d-\d\d\s+\d\d:\d\d:\d\d', '')
 		Local $aTotal = StringRegExp($sTail, '(\d+)\s+(\d+)\s+(\d+)', 1)
 		If Not @error Then Return Int($aTotal[0])
@@ -96,14 +91,11 @@ Func _Arc_UnpackedSize($s7zExe, $sArchive)
 EndFunc   ;==>_Arc_UnpackedSize
 
 
-; Распаковывает архив в $sTargetDir. Прогресс считаем по росту целевой папки:
-; собственный прогресс 7-Zip (-bsp1) при скрытом запуске уходит в консоль,
-; которой нет, и в перенаправленный поток не попадает ни байта.
-;
-; $sProgressCallback($iDone, $iExpected) - вызывается примерно раз в 200 мс.
-; $sAbortCallback() - вернуть True, чтобы прервать распаковку.
-; @error: 1 - процесс не запустился, 2 - прервано, 3 - 7-Zip вернул ошибку.
-; Возвращает [фактически распакованные байты, секунды].
+; Распаковывает архив в $sTargetDir. Прогресс - по росту папки: -bsp1 пишет в консоль,
+; а при скрытом запуске в перенаправленный поток не попадает ни байта.
+; $sProgressCallback($iDone, $iExpected) - примерно раз в 200 мс, $sAbortCallback() - True прерывает.
+; @error: 1 - процесс не запустился, 2 - прервано, 3 - ошибка 7-Zip.
+; Возвращает [распакованные байты, секунды].
 Func _Arc_Unpack($s7zExe, $sArchive, $sTargetDir, $sProgressCallback = "", $sAbortCallback = "")
 	If Not FileExists($s7zExe) Then Return SetError(1, 0, 0)
 	DirCreate($sTargetDir)
@@ -117,7 +109,7 @@ Func _Arc_Unpack($s7zExe, $sArchive, $sTargetDir, $sProgressCallback = "", $sAbo
 	Local $iPid = Run($sCmd, $sTargetDir, @SW_HIDE)
 	If @error Then Return SetError(1, 0, 0)
 
-	; handle держим ради кода возврата: у завершившегося процесса его иначе не спросить
+	; handle держим ради кода возврата после выхода процесса
 	Local $hProcess = _WinAPI_OpenProcess($PROCESS_QUERY_INFORMATION, False, $iPid)
 	Local $iTimer = TimerInit()
 

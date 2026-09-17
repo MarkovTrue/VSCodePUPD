@@ -10,30 +10,28 @@
 #include "Util.au3"
 
 ; ============================================================
-; Загрузка из интернета: опрос update API и скачивание архива.
-; Модуль ничего не знает про GUI - о ходе работы сообщает колбэками,
-; имена которых передаёт вызывающая сторона.
+; Загрузка: опрос update API и скачивание архива. GUI не знает,
+; о ходе работы сообщает колбэками вызывающей стороны.
 ; ============================================================
 
-Global Const $gc_iNetRetryCount = 5      ; столько раз curl сам переживает обрыв
-Global Const $gc_iNetConnectTimeout = 15 ; с, ожидание установки соединения
+Global Const $gc_iNetRetryCount = 5      ; столько обрывов curl переживает сам
+Global Const $gc_iNetConnectTimeout = 15 ; с, ожидание соединения
 
-; Откуда можно качать. Хеш приходит из того же ответа, что и ссылка, поэтому
-; SHA-256 подтверждает целостность, но не источник - хост проверяем отдельно.
+; Откуда можно качать. Хеш приходит в том же ответе, что и ссылка: SHA-256
+; подтверждает целостность, но не источник - хост проверяем отдельно.
 Global Const $gc_sTrustedHosts = "|microsoft.com|vo.msecnd.net|visualstudio.com|azureedge.net|windows.net|"
 
 
-; Спрашивает update API и возвращает [версия, ссылка на архив, sha256, дата выпуска].
-; Дата - unix-время в миллисекундах, как её отдаёт сервер.
-; $iTimeout - мс, дольше ждать нельзя: лаунчер стоит перед запуском редактора.
-; $sTickCallback вызывается в паузах ожидания (можно крутить анимацию).
+; Спрашивает update API: [версия, ссылка на архив, sha256, дата выпуска в unix-мс].
+; $sTickCallback вызывается в паузах ожидания.
 ; @error: 1 - ответа нет, 2 - ответ не разобран, 4 - ссылка ведёт на чужой хост.
 Func _Net_CheckUpdate($sApiUrl, $iTimeout, $sTickCallback = "")
-	; имя с PID: два запущенных экземпляра не должны читать чужой ответ
+	; имя с PID: два экземпляра не должны читать чужой ответ
 	Local $sTmp = @TempDir & "\vscodepupd_update_" & @AutoItPID & ".json"
 	FileDelete($sTmp)
 
 	Local $hDownload = InetGet($sApiUrl, $sTmp, $INET_FORCERELOAD, $INET_DOWNLOADBACKGROUND)
+	If @error Then Return SetError(1, 0, 0) ; иначе ждали бы таймаут на мёртвом handle
 	Local $iTimer = TimerInit()
 
 	While Not InetGetInfo($hDownload, $INET_DOWNLOADCOMPLETE)
@@ -69,8 +67,7 @@ Func _Net_CheckUpdate($sApiUrl, $iTimeout, $sTickCallback = "")
 EndFunc   ;==>_Net_CheckUpdate
 
 
-; Только HTTPS и только известные хосты Microsoft. Ссылку отдаёт сервер обновлений,
-; а качаем мы по ней исполняемый код - принимать любой адрес нельзя.
+; Только HTTPS и только хосты Microsoft: по ссылке качается исполняемый код
 Func _Net_IsTrustedUrl($sUrl)
 	Local $aHost = StringRegExp($sUrl, '^https://([^/:]+)', 1)
 	If @error Then Return False
@@ -84,10 +81,8 @@ Func _Net_IsTrustedUrl($sUrl)
 EndFunc   ;==>_Net_IsTrustedUrl
 
 
-; Размер файла на сервере до начала загрузки. 0 - узнать не удалось.
-; Спрашиваем у curl с жёстким таймаутом: InetGetSize блокирует поток без предела,
-; а лаунчер в это время держит на экране окно проверки.
-; $sTickCallback вызывается в паузах ожидания.
+; Размер файла на сервере, 0 - не узнать. Через curl с таймаутом: InetGetSize
+; блокирует поток без предела, пока на экране окно проверки.
 Func _Net_GetRemoteSize($sUrl, $iTimeout = 5000, $sTickCallback = "")
 	Local $sCurl = @SystemDir & "\curl.exe"
 	If Not FileExists($sCurl) Then Return 0
@@ -111,28 +106,26 @@ Func _Net_GetRemoteSize($sUrl, $iTimeout = 5000, $sTickCallback = "")
 	WEnd
 	$sOut &= StdoutRead($iPid)
 
-	; при -L заголовков несколько: нужен Content-Length последнего ответа
-	Local $aLen = StringRegExp($sOut, '(?im)^Content-Length:\s*(\d+)', 3)
+	; При -L ответов несколько: Content-Length берём только у последнего, у редиректа он свой
+	$sOut = StringRegExpReplace($sOut, '(?s)^.*(?=\nHTTP/)', '')
+	Local $aLen = StringRegExp($sOut, '(?im)^Content-Length:\s*(\d+)', 1)
 	If @error Then Return 0
-	Return Int($aLen[UBound($aLen) - 1])
+	Return Int($aLen[0])
 EndFunc   ;==>_Net_GetRemoteSize
 
 
-; Качает $sUrl в $sFile. Основной путь - curl.exe из System32: он умеет докачку
-; (-C -) и сам переживает обрывы. Прогресс снимаем размером файла на диске,
-; поэтому stdout читать не нужно и вызывающий GUI не блокируется.
-;
-; $sProgressCallback($iDone, $nSpeed) - вызывается примерно раз в 120 мс.
-; $sAbortCallback() - вернуть True, чтобы прервать загрузку.
-; @error: 1 - процесс не запустился, 2 - прервано вызывающей стороной,
-;         3 - curl вернул ошибку (@extended - его код возврата).
-; Возвращает секунды, потраченные на загрузку.
+; Качает $sUrl в $sFile через curl.exe из System32: докачка (-C -) и повторы при обрывах.
+; Прогресс - по размеру файла на диске, stdout не читаем.
+; $sProgressCallback($iDone, $nSpeed) - примерно раз в 120 мс.
+; $sAbortCallback() - True прерывает загрузку.
+; @error: 1 - процесс не запустился, 2 - прервано, 3 - ошибка curl (@extended - код).
+; Возвращает секунды загрузки, 0 - файл уже лежал целиком.
 Func _Net_Download($sUrl, $sFile, $iTotalSize, $sProgressCallback = "", $sAbortCallback = "")
 	Local $sCurl = @SystemDir & "\curl.exe"
-	If Not FileExists($sCurl) Then Return _Net_DownloadInet($sUrl, $sFile, $iTotalSize, $sProgressCallback, $sAbortCallback)
+	If Not FileExists($sCurl) Then Return _Net_DownloadInet($sUrl, $sFile, $sProgressCallback, $sAbortCallback)
 
 	Local $iAlready = _Util_FileSizeLive($sFile)
-	If $iAlready > 0 And $iTotalSize > 0 And $iAlready >= $iTotalSize Then Return 0 ; архив уже лежит целиком
+	If $iAlready > 0 And $iTotalSize > 0 And $iAlready >= $iTotalSize Then Return 0
 
 	Local $sCmd = '"' & $sCurl & '" -L -C - --retry ' & $gc_iNetRetryCount & ' --retry-delay 2 --retry-all-errors' & _
 			' --connect-timeout ' & $gc_iNetConnectTimeout & ' --no-progress-meter -o "' & $sFile & '" "' & $sUrl & '"'
@@ -143,9 +136,7 @@ Func _Net_Download($sUrl, $sFile, $iTotalSize, $sProgressCallback = "", $sAbortC
 	Local $iSpeedTimer = TimerInit(), $iTotalTimer = TimerInit()
 	Local $iLastSize = $iAlready, $nSpeed = 0
 
-	; Держим handle процесса: он не даёт системе выбросить запись о завершившемся
-	; процессе, поэтому код возврата остаётся читаемым после выхода из цикла.
-	; ProcessWaitClose с таймаутом 0 здесь не годится - это ожидание без предела.
+	; Handle держит запись о процессе живой: код возврата читается и после выхода
 	Local $hProcess = _WinAPI_OpenProcess($PROCESS_QUERY_INFORMATION, False, $iPid)
 
 	While ProcessExists($iPid)
@@ -169,19 +160,21 @@ Func _Net_Download($sUrl, $sFile, $iTotalSize, $sProgressCallback = "", $sAbortC
 	WEnd
 
 	Local $iExit = _Util_ExitCode($hProcess)
+	; 2 - незнакомый ключ: curl 7.55 ранних сборок Windows 10 не знает --retry-all-errors
+	; и --no-progress-meter, а файл он при этом не трогает
+	If $iExit = 2 Then Return _Net_DownloadInet($sUrl, $sFile, $sProgressCallback, $sAbortCallback)
 	If $iExit <> 0 Then Return SetError(3, $iExit, 0)
 
 	Return TimerDiff($iTotalTimer) / 1000
 EndFunc   ;==>_Net_Download
 
 
-; Запасной путь для систем без curl.exe: InetGet умеет фоновую загрузку,
-; но докачки не поддерживает - при обрыве файл качается заново.
-Func _Net_DownloadInet($sUrl, $sFile, $iTotalSize, $sProgressCallback = "", $sAbortCallback = "")
-	#forceref $iTotalSize
+; Запасной путь без curl: InetGet качает в фоне, но без докачки - файл начинается заново
+Func _Net_DownloadInet($sUrl, $sFile, $sProgressCallback = "", $sAbortCallback = "")
 	FileDelete($sFile)
 
 	Local $hDownload = InetGet($sUrl, $sFile, $INET_FORCERELOAD, $INET_DOWNLOADBACKGROUND)
+	If @error Then Return SetError(1, 0, 0)
 	Local $iSpeedTimer = TimerInit(), $iTotalTimer = TimerInit()
 	Local $iLastSize = 0, $nSpeed = 0
 
@@ -208,7 +201,3 @@ Func _Net_DownloadInet($sUrl, $sFile, $iTotalSize, $sProgressCallback = "", $sAb
 
 	Return TimerDiff($iTotalTimer) / 1000
 EndFunc   ;==>_Net_DownloadInet
-
-
-; Размер растущего файла, код возврата процесса и разбор пути живут в Util.au3:
-; ими пользуются и модуль архива, и сам лаунчер.
