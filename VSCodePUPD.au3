@@ -1,9 +1,8 @@
 ﻿#pragma compile(Out, #Build\VSCodePUPD.exe)
 #pragma compile(Icon, Assets\Icons\Icon.ico)
 #pragma compile(ProductName, VSCodePUPD)
-#pragma compile(FileDescription, Launcher and updater for portable VS Code)
+#pragma compile(FileDescription, Updater for portable VS Code)
 #pragma compile(FileVersion, 1.0.3.0)
-; x64 обязательно: _ProcessCwd читает PEB чужого процесса по смещениям x64
 #pragma compile(x64, true)
 
 #NoTrayIcon
