@@ -1,5 +1,5 @@
 ﻿#pragma compile(Out, #Build\VSCodePUPD.exe)
-#pragma compile(Icon, Assets\Icon.ico)
+#pragma compile(Icon, Assets\Icons\Icon.ico)
 #pragma compile(ProductName, VSCodePUPD)
 #pragma compile(FileDescription, Launcher and updater for portable VS Code)
 #pragma compile(FileVersion, 1.0.3.0)

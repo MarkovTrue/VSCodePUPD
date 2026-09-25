@@ -1,11 +1,11 @@
-# <img src="Assets/HeaderIcon.png" alt="Logo" width="28" align="absmiddle"/>&nbsp; VSCodePUPD
+# <img src="Preview/HeaderIcon.png" width="30" height="36" align="absmiddle" alt=""> VSCodePUPD
 
-[![Release](https://img.shields.io/github/v/release/MarkovTrue/VSCodePUPD?label=Release&color=%238a2be2&logo=starship&logoColor=white)](https://github.com/MarkovTrue/VSCodePUPD/releases) [![Downloads](https://img.shields.io/github/downloads/MarkovTrue/VSCodePUPD/total?label=Downloads&color=%230078D4&logo=github&logoColor=white)](https://github.com/MarkovTrue/VSCodePUPD/releases)
+[![Release](https://img.shields.io/github/v/release/MarkovTrue/VSCodePUPD?label=Release&color=%238a2be2&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xMSAyMS43M2EyIDIgMCAwIDAgMiAwbDctNEEyIDIgMCAwIDAgMjEgMTZWOGEyIDIgMCAwIDAtMS0xLjczbC03LTRhMiAyIDAgMCAwLTIgMGwtNyA0QTIgMiAwIDAgMCAzIDh2OGEyIDIgMCAwIDAgMSAxLjczeiIvPjxwYXRoIGQ9Ik0xMiAyMlYxMiIvPjxwb2x5bGluZSBwb2ludHM9IjMuMjkgNyAxMiAxMiAyMC43MSA3Ii8%2BPC9zdmc%2B)](https://github.com/MarkovTrue/VSCodePUPD/releases) [![Downloads](https://img.shields.io/github/downloads/MarkovTrue/VSCodePUPD/total?label=Downloads&color=%230078D4&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0yMSAxNXY0YTIgMiAwIDAgMS0yIDJINWEyIDIgMCAwIDEtMi0ydi00Ii8%2BPHBvbHlsaW5lIHBvaW50cz0iNyAxMCAxMiAxNSAxNyAxMCIvPjxsaW5lIHgxPSIxMiIgeDI9IjEyIiB5MT0iMTUiIHkyPSIzIi8%2BPC9zdmc%2B)](https://github.com/MarkovTrue/VSCodePUPD/releases)
 
 Портативный [Visual Studio Code](https://code.visualstudio.com/docs/setup/portable) не умеет обновляться автоматически.
 VS Code Portable Updater берет на себя эту рутину.
 
-![Превью](Assets/Preview.png)
+![Превью](Preview/Preview.png)
 
 ### Как это работает
 
