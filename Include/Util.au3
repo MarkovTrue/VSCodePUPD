@@ -270,41 +270,63 @@ Func _FolderNames($aBusy)
 EndFunc   ;==>_FolderNames
 
 
-; Снимает держателей папки и ждёт, пока её отдадут. True - отдали.
-; Насмерть, без WM_CLOSE: вопрос редактора о несохранённом остановил бы всё на середине.
-; $sOnLeft получает живых держателей на каждом круге, $sIsAborted спрашивает об отмене.
+; Освобождает папку через LockHunter и ждёт, пока её отдадут. True - отдали.
+; Он закрывает чужие handle в папке и снимает процессы, запущенные из неё, - в том числе
+; тех, кого не видит _FolderHolders (проводник, индексатор, антивирус). Насмерть, без
+; WM_CLOSE: вопрос редактора о несохранённом остановил бы всё на середине.
+; Не отдали - запускаем снова: у гибнущего редактора ещё рождаются дочерние процессы.
+; $sOnLeft получает живых держателей раз в 400 мс, $sIsAborted спрашивает об отмене.
+; @error 1 - LockHunter не запустился.
 Func _FolderRelease($sFolder, $sOnLeft = "", $sIsAborted = "", $iTimeout = 20000)
-	Local $aBusy = _FolderHolders($sFolder)
-	_Util_Log("Освобождение папки: " & UBound($aBusy) & " процессов")
-	_FolderKillHolders($aBusy)
+	_Util_Log("Освобождение папки через LockHunter: " & UBound(_FolderHolders($sFolder)) & " процессов")
 
-	; Ждём саму папку, а не пустой список: файлы отпускают не сразу после гибели процесса
+	Local $iPid = 0, $hUnlocker = 0, $bFree = False
 	Local $iTimer = TimerInit(), $iNextCheck = 0
 	While TimerDiff($iTimer) < $iTimeout
+		If $iPid = 0 Then
+			$iPid = _FolderUnlockStart($sFolder)
+			If $iPid = 0 Then Return SetError(1, 0, False)
+			; handle держим ради кода возврата после выхода процесса
+			$hUnlocker = _WinAPI_OpenProcess($PROCESS_QUERY_LIMITED_INFORMATION, False, $iPid)
+		EndIf
+
 		Sleep(30)
-		If $sIsAborted <> "" And Call($sIsAborted) Then Return False
+		If $sIsAborted <> "" And Call($sIsAborted) Then ExitLoop
 
 		; Обход процессов стоит около 50 мс - не чаще раза в 400 мс
 		If TimerDiff($iTimer) < $iNextCheck Then ContinueLoop
 		$iNextCheck = TimerDiff($iTimer) + 400
+		If $sOnLeft <> "" Then Call($sOnLeft, _FolderHolders($sFolder))
 
-		$aBusy = _FolderHolders($sFolder)
-		If $sOnLeft <> "" Then Call($sOnLeft, $aBusy)
-		If _FolderIsFree($sFolder) Then Return True
-
-		; Каждый круг: у гибнущего редактора всё ещё рождаются дочерние процессы
-		_FolderKillHolders($aBusy)
+		; Проба - после выхода: посреди работы LockHunter её ответ ничего не значит
+		If ProcessExists($iPid) Then ContinueLoop
+		_Util_Log("LockHunter завершился с кодом " & _Util_ExitCode($hUnlocker)) ; 0 - разблокировал, 1 - не смог, 2 - сбой
+		$iPid = 0
+		If _FolderIsFree($sFolder) Then
+			$bFree = True
+			ExitLoop
+		EndIf
 	WEnd
 
-	Return False
+	; Работающий LockHunter не снимаем: брошенный посреди разблокировки, он оставил бы загруженный драйвер
+	If $iPid And $hUnlocker Then _WinAPI_CloseHandle($hUnlocker)
+	Return $bFree
 EndFunc   ;==>_FolderRelease
 
 
-Func _FolderKillHolders($aBusy)
-	For $i = 0 To UBound($aBusy) - 1
-		ProcessClose($aBusy[$i][0])
-	Next
-EndFunc   ;==>_FolderKillHolders
+; Запускает LockHunter без окна и не ждёт: драйвер грузится полсекунды, а окно должно жить.
+; Run хватает: программа сама под администратором (#RequireAdmin), без этого LockHunter не стартует.
+; Возвращает PID, 0 - не запустился.
+Func _FolderUnlockStart($sFolder)
+	Local $iPid = Run('"' & $gc_sLockHunter & '" /unlock /kill /silent "' & $sFolder & '"', _
+			_Util_ParentDir($gc_sLockHunter), @SW_HIDE)
+	If @error Or Not $iPid Then
+		_Util_Log("ОШИБКА: LockHunter не запустился: " & $gc_sLockHunter)
+		Return 0
+	EndIf
+
+	Return $iPid
+EndFunc   ;==>_FolderUnlockStart
 
 
 ; Путь к exe процесса. QueryFullProcessImageName хватает ограниченного доступа - без прав администратора.

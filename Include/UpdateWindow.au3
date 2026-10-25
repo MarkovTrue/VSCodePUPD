@@ -15,7 +15,7 @@
 #include "Controls.au3"
 #include "Util.au3"
 
-Global $g_hMain = 0, $g_iHero, $g_iHeroArrow, $g_iHeroNew, $g_iHeroSub, $g_iBarBg, $g_iBar
+Global $g_hMain = 0, $g_iHero, $g_iHeroNew, $g_iHeroSub, $g_iBarBg, $g_iBar
 Global $g_iStatus, $g_iStatusInfo
 Global $g_iBtnMain = 0, $g_iBtnAlt = 0
 Global $g_iBarTop = 0, $g_iButtonTop = 0 ; считаются от числа шагов при построении окна
@@ -30,10 +30,8 @@ Global Const $gc_iBtnRight = $gc_iMainWidth - $gc_iPad
 Global Const $gc_iStepInfoLeft = 240
 Global Const $gc_iStepTitleWidth = $gc_iStepInfoLeft - 44 - 8
 
-Global Const $gc_sMarkWait = ChrW(0x25CB) ; ○
-Global Const $gc_sMarkRun = ChrW(0x25CF)  ; ●
-Global Const $gc_sMarkDone = ChrW(0x2713) ; ✓
-Global Const $gc_sMarkErr = ChrW(0x2715)  ; ✕
+; Значок шага 14 px - как статусы Moth; стрелка шапки - 22 px с зазором до версий
+Global Const $gc_iMarkSize = 14, $gc_iArrowSize = 22, $gc_iArrowGap = 8
 
 ; Шаги этого прогона и их индексы: заполняет _BuildSteps по $gc_aStepPlan
 Global $g_aStepTitle[1] = [""], $g_aStepWeight[1] = [100]
@@ -67,44 +65,47 @@ Func _MainGUI()
 
 	$g_hMain = GUICreate($gc_sTitle, $gc_iMainWidth, $g_iButtonTop + $gc_iBtnHeight + 16, -1, -1, _
 			BitOR($WS_POPUP, $WS_CAPTION, $WS_SYSMENU))
-	GUISetBkColor($gc_iClrBg, $g_hMain)
 	GUISetFont($gc_nFontBody, 400, 0, "Segoe UI", $g_hMain)
-	_GUISetDarkTitleBar($g_hMain)
+	_DarkWindowInit($g_hMain)
 
-	; --- Шапка: версии отдельными метками, новая - акцентом ---
+	; --- Шапка: версии отдельными метками, новая - акцентом, между ними стрелка-значок ---
 	; Крупный шрифт ставим на GUI до создания меток: так их размер замеряется по нему.
-	; Пробелы - внутри текста, а не зазором между метками: иначе версии расползаются.
 	GUISetFont($gc_nFontTitle, 300, 0, "Segoe UI", $g_hMain)
-	$g_iHero = _DarkLabel($g_sVerCur & " ", $gc_iBarLeft, 16, 10, 30, $gc_iClrText)
-	$g_iHeroArrow = _DarkLabel(ChrW(0x2192) & " ", $gc_iBarLeft, 16, 10, 30, $gc_iClrDim)
+	$g_iHero = _DarkLabel($g_sVerCur, $gc_iBarLeft, 16, 10, 30, $g_iFluentText1)
+	_LayoutRow($gc_iBarLeft, 16, 30, $g_iHero, $g_sVerCur)
+
+	; Стрелка по середине цифр: у Segoe UI 20 px их центр на 15 px ниже верха метки
+	Local $iArrowLeft = $gc_iBarLeft + _TextWidth($g_iHero, $g_sVerCur) + $gc_iArrowGap
+	Local $iArrow = _DarkIcon($iArrowLeft, 16 + 15 - $gc_iArrowSize / 2, $gc_iArrowSize)
+	_DarkIconSet($iArrow, "arrow", $g_iFluentText3, 1.5)
 
 	GUISetFont($gc_nFontTitle, 600, 0, "Segoe UI", $g_hMain)
 	$g_iHeroNew = _DarkLabel($g_sVerNew, $gc_iBarLeft, 16, 10, 30, $gc_iClrRun)
-
-	_LayoutRow($gc_iBarLeft, 16, 30, $g_iHero, $g_sVerCur & " ", $g_iHeroArrow, ChrW(0x2192) & " ", $g_iHeroNew, $g_sVerNew)
+	_LayoutRow($iArrowLeft + $gc_iArrowSize + $gc_iArrowGap, 16, 30, $g_iHeroNew, $g_sVerNew)
 
 	; Под версиями - только обновляемая папка: архив и его размер уже были в первом окне
 	GUISetFont($gc_nFontBody, 400, 0, "Segoe UI", $g_hMain)
-	$g_iHeroSub = _DarkLabel("", $gc_iBarLeft, 54, $gc_iBarWidth, 18, $gc_iClrDim, -1, $gc_nFontCaption)
+	$g_iHeroSub = _DarkLabel("", $gc_iBarLeft, 54, $gc_iBarWidth, 18, $g_iFluentText3, -1, $gc_nFontCaption)
 	GUICtrlSetData($g_iHeroSub, _FitPath($g_iHeroSub, $g_sTargetPath, "", False))
 
 	; --- Шаги ---
 	Local $iTop = $gc_iStepTop
 	For $i = 0 To UBound($g_aStepTitle) - 1
-		$g_aMarker[$i] = _DarkLabel($gc_sMarkWait, 22, $iTop, 18, 20, $gc_iClrWait)
+		$g_aMarker[$i] = _DarkIcon(24, $iTop + 3, $gc_iMarkSize) ; +3 - центр значка на середине строчных букв
+		_DarkIconSet($g_aMarker[$i], "wait", $gc_iClrWait, 1.5)
 		$g_aStepLabel[$i] = _DarkLabel($g_aStepTitle[$i], 44, $iTop, $gc_iStepTitleWidth, 20, $gc_iClrWait)
 		; серый шрифт мельче - сдвиг вниз ставит тексты на одну линию
 		$g_aStepSub[$i] = _DarkLabel("", $gc_iStepInfoLeft, $iTop + 2, $gc_iBtnRight - $gc_iStepInfoLeft, 18, _
-				$gc_iClrDim, -1, $gc_nFontCaption, 400, $SS_RIGHT)
+				$g_iFluentText3, -1, $gc_nFontCaption, 400, $SS_RIGHT)
 		$iTop += $gc_iStepPitch
 	Next
 
 	; --- Прогресс и статус ---
-	$g_iBarBg = _DarkLabel("", $gc_iBarLeft, $g_iBarTop, $gc_iBarWidth, $gc_iBarHeight, $gc_iClrText, $gc_iClrBarBg)
-	$g_iBar = _DarkLabel("", $gc_iBarLeft, $g_iBarTop, 0, $gc_iBarHeight, $gc_iClrText, $gc_iClrBar)
-	$g_iStatus = _DarkLabel("", $gc_iBarLeft, $g_iBarTop + 16, 200, 20, $gc_iClrText)
+	$g_iBarBg = _DarkLabel("", $gc_iBarLeft, $g_iBarTop, $gc_iBarWidth, $gc_iBarHeight, $g_iFluentText1, $gc_iClrBarBg)
+	$g_iBar = _DarkLabel("", $gc_iBarLeft, $g_iBarTop, 0, $gc_iBarHeight, $g_iFluentText1, $gc_iClrBar)
+	$g_iStatus = _DarkLabel("", $gc_iBarLeft, $g_iBarTop + 16, 200, 20, $g_iFluentText1)
 	$g_iStatusInfo = _DarkLabel("", $gc_iBarLeft + 200, $g_iBarTop + 18, $gc_iBarWidth - 200, 18, _
-			$gc_iClrDim, -1, $gc_nFontCaption, 400, $SS_RIGHT)
+			$g_iFluentText3, -1, $gc_nFontCaption, 400, $SS_RIGHT)
 
 	; --- Кнопки: 'Повторить' спрятана до ошибки ---
 	$g_iBtnMain = _DarkButton("Повторить", $gc_iBtnRight, $g_iButtonTop, True)
@@ -115,6 +116,7 @@ Func _MainGUI()
 	GUICtrlSetOnEvent($g_iBtnMain, "_OnEvent_ButtonMain")
 	GUICtrlSetOnEvent($g_iBtnAlt, "_OnEvent_ButtonAlt")
 
+	_DarkWindowApply($g_hMain)
 	GUISetState(@SW_SHOW, $g_hMain)
 EndFunc   ;==>_MainGUI
 
@@ -178,28 +180,26 @@ EndFunc   ;==>_BuildSteps
 
 ; Нижние кнопки: в работе 'Отмена', при ошибке ещё 'Повторить', после успеха 'Закрыть'
 Func _LayoutButtons($sMode)
-	_UpdateHover(0, True)
-
 	Switch $sMode
 		Case "work"
 			GUICtrlSetState($g_iBtnMain, $GUI_HIDE)
 			GUICtrlSetState($g_iBtnAlt, $GUI_SHOW)
-			GUICtrlSetData($g_iBtnAlt, "Отмена")
+			_SetButtonText($g_iBtnAlt, "Отмена")
 			_PlaceButtons($gc_iBtnRight, $g_iButtonTop, $g_iBtnAlt)
 			_SetButtonEnabled($g_iBtnAlt, True)
 
 		Case "error"
 			GUICtrlSetState($g_iBtnMain, $GUI_SHOW)
 			GUICtrlSetState($g_iBtnAlt, $GUI_SHOW)
-			GUICtrlSetData($g_iBtnMain, "Повторить")
-			GUICtrlSetData($g_iBtnAlt, "Отмена") ; без повтора редактор запустится как есть
+			_SetButtonText($g_iBtnMain, "Повторить")
+			_SetButtonText($g_iBtnAlt, "Отмена") ; без повтора редактор запустится как есть
 			_PlaceButtons($gc_iBtnRight, $g_iButtonTop, $g_iBtnMain, $g_iBtnAlt)
 			_SetButtonEnabled($g_iBtnMain, True)
 			_SetButtonEnabled($g_iBtnAlt, True)
 
 		Case "done"
 			GUICtrlSetState($g_iBtnMain, $GUI_HIDE)
-			GUICtrlSetData($g_iBtnAlt, "Закрыть")
+			_SetButtonText($g_iBtnAlt, "Закрыть")
 			_PlaceButtons($gc_iBtnRight, $g_iButtonTop, $g_iBtnAlt)
 			_SetButtonEnabled($g_iBtnAlt, True)
 	EndSwitch
@@ -208,27 +208,26 @@ EndFunc   ;==>_LayoutButtons
 
 ; Состояния шага: wait, run, done, err.
 Func _SetStep($iStep, $sState, $sSub = "")
-	Local $sMark = $gc_sMarkWait, $iMarkColor = $gc_iClrWait, $iTextColor = $gc_iClrWait
+	Local $sMark = "wait", $iMarkColor = $gc_iClrWait, $iTextColor = $gc_iClrWait
 
 	Switch $sState
 		Case "run"
-			$sMark = $gc_sMarkRun
+			$sMark = "run"
 			$iMarkColor = $gc_iClrRun
-			$iTextColor = $gc_iClrText
+			$iTextColor = $g_iFluentText1
 		Case "done"
-			$sMark = $gc_sMarkDone
-			$iMarkColor = $gc_iClrOk
-			$iTextColor = $gc_iClrText
+			$sMark = "check"
+			$iMarkColor = $g_iFluentOk
+			$iTextColor = $g_iFluentText1
 		Case "err"
-			$sMark = $gc_sMarkErr
-			$iMarkColor = $gc_iClrErr
-			$iTextColor = $gc_iClrErr
+			$sMark = "x"
+			$iMarkColor = $g_iFluentErr
+			$iTextColor = $g_iFluentErr
 	EndSwitch
 
-	GUICtrlSetData($g_aMarker[$iStep], $sMark)
-	GUICtrlSetColor($g_aMarker[$iStep], $iMarkColor)
+	_DarkIconSet($g_aMarker[$iStep], $sMark, $iMarkColor, ($sMark = "wait") ? 1.5 : 1.75)
 	GUICtrlSetColor($g_aStepLabel[$iStep], $iTextColor)
-	GUICtrlSetColor($g_aStepSub[$iStep], ($sState = "err") ? $gc_iClrErr : $gc_iClrDim)
+	GUICtrlSetColor($g_aStepSub[$iStep], ($sState = "err") ? $g_iFluentErr : $g_iFluentText3)
 	If $sSub <> "" Or $sState <> "run" Then GUICtrlSetData($g_aStepSub[$iStep], $sSub)
 
 	If $sState = "done" Then _SetProgressStep($iStep + 1, 0)
@@ -253,7 +252,7 @@ Func _SetStatus($sText, $bError = False, $sInfo = "")
 	GUICtrlSetPos($g_iStatus, $gc_iBarLeft, $g_iBarTop + 16, $iWidth, 20)
 	GUICtrlSetPos($g_iStatusInfo, $gc_iBarLeft + $iWidth, $g_iBarTop + 18, $gc_iBarWidth - $iWidth, 18)
 	GUICtrlSetData($g_iStatus, $sText)
-	GUICtrlSetColor($g_iStatus, $bError ? $gc_iClrErr : $gc_iClrText)
+	GUICtrlSetColor($g_iStatus, $bError ? $g_iFluentErr : $g_iFluentText1)
 	GUICtrlSetData($g_iStatusInfo, $sInfo)
 	_MainRepaint()
 EndFunc   ;==>_SetStatus
@@ -301,7 +300,6 @@ Func _FailStep($iStep, $sMsg, $sSub = "")
 	$g_iChoice = 0
 	While $g_iChoice = 0 And Not $g_bCancel
 		Sleep(30)
-		_UpdateHover($g_hMain)
 	WEnd
 
 	Return ($g_iChoice = 1)

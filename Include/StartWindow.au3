@@ -30,9 +30,13 @@ Global $g_aStartIconSrc[0] ; что уже загружено в иконку с
 Global $g_iStartTrack = 0, $g_iStartThumb = 0
 Global $g_iStartRow = 0 ; первая видимая строка
 Global $g_iStartSlots = 0 ; сколько строк видно, задаётся при показе списка
+Global $g_iStartPathWidth = 0 ; ширина колонки пути: меняется, когда появляется или уходит прокрутка
+Global $g_sStartMode = "" ; ask/closing/fail - опрос держателей перерисовывает его заново
 
 ; Зона под надписями: при проверке там полоса, при вопросе - кнопки
 Global Const $gc_iStartActionTop = 72
+; Кнопки вопроса о версии: от подстрочника до них 20 px, как от таблицы держателей до её кнопок
+Global Const $gc_iStartAskTop = 81
 Global Const $gc_iStartHeight = $gc_iStartActionTop + $gc_iBtnHeight + 22
 
 ; Таблица держателей: строк не больше $gc_iStartMaxRows, дальше прокрутка
@@ -41,6 +45,7 @@ Global Const $gc_iStartTableTop = 76
 Global Const $gc_iStartNameLeft = 44, $gc_iStartNameWidth = 140
 Global Const $gc_iStartPathLeft = $gc_iStartNameLeft + $gc_iStartNameWidth + 12
 Global Const $gc_iStartBarWidth = 6 ; полоса прокрутки справа от таблицы
+Global Const $gc_iStartPoll = 2000 ; как часто сверять таблицу с живыми процессами, пока ждём ответа
 
 ; Заголовок всех состояний с таблицей: от вопроса до отказа он не меняется
 Global Const $gc_sStartLocked = "Папка VS Code заблокирована"
@@ -55,20 +60,19 @@ Global Const $gc_sIconStub = @SystemDir & "\cmd.exe"
 Func _StartGUI()
 	$g_hStart = GUICreate($gc_sTitle, $gc_iPopupWidth, $gc_iStartHeight, -1, -1, _
 			BitOR($WS_POPUP, $WS_CAPTION, $WS_SYSMENU), $WS_EX_TOPMOST)
-	GUISetBkColor($gc_iClrBg, $g_hStart)
 	GUISetFont($gc_nFontBody, 400, 0, "Segoe UI", $g_hStart)
-	_GUISetDarkTitleBar($g_hStart)
+	_DarkWindowInit($g_hStart)
 
 	Local $iWidth = $gc_iPopupWidth - 2 * $gc_iPad
-	$g_iStartTitle = _DarkLabel("Проверка обновлений...", $gc_iPad, $gc_iPad, $iWidth, 20, $gc_iClrText)
-	$g_iStartSub = _DarkLabel("", $gc_iPad, 46, $iWidth, 18, $gc_iClrDim, -1, $gc_nFontCaption)
-	$g_iStartBarBg = _DarkLabel("", $gc_iPad, $gc_iStartActionTop + 13, $iWidth, 6, $gc_iClrText, $gc_iClrBarBg)
-	$g_iStartBar = _DarkLabel("", $gc_iPad, $gc_iStartActionTop + 13, 0, 6, $gc_iClrText, $gc_iClrBar)
+	$g_iStartTitle = _DarkLabel("Проверка обновлений...", $gc_iPad, $gc_iPad, $iWidth, 20, $g_iFluentText1)
+	$g_iStartSub = _DarkLabel("", $gc_iPad, 46, $iWidth, 18, $g_iFluentText3, -1, $gc_nFontCaption)
+	$g_iStartBarBg = _DarkLabel("", $gc_iPad, $gc_iStartActionTop + 13, $iWidth, 6, $g_iFluentText1, $gc_iClrBarBg)
+	$g_iStartBar = _DarkLabel("", $gc_iPad, $gc_iStartActionTop + 13, 0, 6, $g_iFluentText1, $gc_iClrBar)
 
-	$g_iStartHead = _DarkLabel("", $gc_iPad, $gc_iPad, 10, 20, $gc_iClrText)
+	$g_iStartHead = _DarkLabel("", $gc_iPad, $gc_iPad, 10, 20, $g_iFluentText1)
 	$g_iStartVer = _DarkLabel("", $gc_iPad, $gc_iPad, 10, 20, $gc_iClrRun)
 	GUICtrlSetFont($g_iStartVer, $gc_nFontBody, 600, 0, "Segoe UI")
-	$g_iStartTail = _DarkLabel("", $gc_iPad, $gc_iPad, 10, 20, $gc_iClrText)
+	$g_iStartTail = _DarkLabel("", $gc_iPad, $gc_iPad, 10, 20, $g_iFluentText1)
 	_StartShow(False, $g_iStartHead, $g_iStartVer, $g_iStartTail)
 
 	; --- Строки таблицы держателей и полоса прокрутки ---
@@ -81,19 +85,20 @@ Func _StartGUI()
 		Local $iY = $gc_iStartTableTop + $i * $gc_iStartPitch
 		$g_aStartIcon[$i] = GUICtrlCreateIcon($gc_sIconStub, 0, $gc_iPad, $iY + 3, 16, 16)
 		GUICtrlSetResizing($g_aStartIcon[$i], $GUI_DOCKALL)
+		_FluentTheme_Exclude($g_aStartIcon[$i]) ; иконка - не подпись, перекрашивать нечего
 		$g_aStartIconSrc[$i] = $gc_sIconStub
-		$g_aStartName[$i] = _DarkLabel("", $gc_iStartNameLeft, $iY + 2, $gc_iStartNameWidth, 18, $gc_iClrText)
+		$g_aStartName[$i] = _DarkLabel("", $gc_iStartNameLeft, $iY + 2, $gc_iStartNameWidth, 18, $g_iFluentText1)
 		$g_aStartPath[$i] = _DarkLabel("", $gc_iStartPathLeft, $iY + 4, _
-				$gc_iPopupWidth - $gc_iStartPathLeft - $gc_iPad, 16, $gc_iClrDim, -1, $gc_nFontCaption)
+				$gc_iPopupWidth - $gc_iStartPathLeft - $gc_iPad, 16, $g_iFluentText3, -1, $gc_nFontCaption)
 		_StartShow(False, $g_aStartIcon[$i], $g_aStartName[$i], $g_aStartPath[$i])
 	Next
 
 	Local $iBarLeft = $gc_iPopupWidth - $gc_iPad - $gc_iStartBarWidth
 	; трек кликабельный: колесо есть не у всех
 	$g_iStartTrack = _DarkLabel("", $iBarLeft, $gc_iStartTableTop, $gc_iStartBarWidth, _
-			$gc_iStartMaxRows * $gc_iStartPitch, $gc_iClrText, $gc_iClrBarBg, $gc_nFontBody, 400, $SS_NOTIFY)
+			$gc_iStartMaxRows * $gc_iStartPitch, $g_iFluentText1, $gc_iClrBarBg, $gc_nFontBody, 400, $SS_NOTIFY)
 	$g_iStartThumb = _DarkLabel("", $iBarLeft, $gc_iStartTableTop, $gc_iStartBarWidth, _
-			$gc_iStartMaxRows * $gc_iStartPitch, $gc_iClrText, $gc_iClrBtnDisText)
+			$gc_iStartMaxRows * $gc_iStartPitch, $g_iFluentText1, $gc_iClrThumb)
 	_StartShow(False, $g_iStartTrack, $g_iStartThumb)
 
 	$g_iStartBtnMain = _DarkButton("Обновить", 0, $gc_iStartActionTop, True)
@@ -104,12 +109,13 @@ Func _StartGUI()
 	GUICtrlSetOnEvent($g_iStartBtnMain, "_OnEvent_ChoiceUpdate")
 	GUICtrlSetOnEvent($g_iStartBtnAlt, "_OnEvent_ChoiceRun")
 	GUICtrlSetOnEvent($g_iStartTrack, "_OnEvent_StartTrack")
-	GUIRegisterMsg($WM_MOUSEWHEEL, "_OnStartWheel")
+	_FluentMsg_Register($WM_MOUSEWHEEL, "_OnStartWheel")
 
 	; Адрес без схемы и насколько влезает: платформа и канал в хвосте говорят, что качается
 	Local $sApi = StringReplace($gc_sUpdateApi, "https://", "")
 	_StartSub(_FitMiddle($g_iStartSub, $sApi, "/"), $gc_sUpdateApi)
 
+	_DarkWindowApply($g_hStart)
 	GUISetState(@SW_SHOW, $g_hStart)
 EndFunc   ;==>_StartGUI
 
@@ -127,12 +133,13 @@ EndFunc   ;==>_StartShow
 
 ; Итоговые надписи и полоса во всю ширину. Цвет полосы - как у сообщения:
 ; синяя под отказом читалась бы как успех.
-Func _StartState($sText, $sSub, $iColor = $gc_iClrText)
+Func _StartState($sText, $sSub, $iColor = Default)
+	If $iColor = Default Then $iColor = $g_iFluentText1
 	GUICtrlSetData($g_iStartTitle, $sText)
 	GUICtrlSetColor($g_iStartTitle, $iColor)
 	_StartSub($sSub)
 
-	GUICtrlSetBkColor($g_iStartBar, ($iColor = $gc_iClrText) ? $gc_iClrBar : $iColor)
+	GUICtrlSetBkColor($g_iStartBar, ($iColor = $g_iFluentText1) ? $gc_iClrBar : $iColor)
 	GUICtrlSetPos($g_iStartBar, $gc_iPad, $gc_iStartActionTop + 13, $gc_iPopupWidth - 2 * $gc_iPad, 6)
 EndFunc   ;==>_StartState
 
@@ -175,7 +182,8 @@ Func _StartAskVersion()
 	_StartShow(False, $g_iStartTitle, $g_iStartBarBg, $g_iStartBar)
 	_StartShow(True, $g_iStartHead, $g_iStartVer, $g_iStartTail)
 	_StartSub($sSize)
-	_StartButtons("Обновить", "Пропустить", $gc_iStartActionTop)
+	_StartResize($gc_iStartAskTop)
+	_StartButtons("Обновить", "Пропустить", $gc_iStartAskTop)
 
 	Return _StartWait()
 EndFunc   ;==>_StartAskVersion
@@ -188,43 +196,59 @@ Func _StartLocked()
 	_StartShow(False, $g_iStartBtnMain, $g_iStartBtnAlt)
 
 	GUICtrlSetData($g_iStartTitle, $gc_sStartLocked)
-	GUICtrlSetColor($g_iStartTitle, $gc_iClrWarn)
+	GUICtrlSetColor($g_iStartTitle, $g_iFluentWarn)
 	_StartShow(True, $g_iStartTitle)
 EndFunc   ;==>_StartLocked
 
 
 ; Разворачивает окно под список держателей. Высота считается один раз: строки
 ; при разблокировке исчезают по одной, и окно прыгало бы под курсором.
+; Пустой список - держатель не виден, строк нет, кнопки сразу под подстрочником.
 Func _StartHolders($aRows)
 	$g_aStartRows = $aRows
 	$g_iStartRow = 0
 
 	Local $iVisible = UBound($aRows)
 	If $iVisible > $gc_iStartMaxRows Then $iVisible = $gc_iStartMaxRows
-	If $iVisible < 1 Then $iVisible = 1
 
 	_StartShow(False, $g_iStartBarBg, $g_iStartBar)
 
-	; С полосой прокрутки колонка пути ужимается, чтобы не лезть под неё
-	Local $bScroll = UBound($aRows) > $gc_iStartMaxRows
-	Local $iPathWidth = $gc_iPopupWidth - $gc_iStartPathLeft - $gc_iPad - ($bScroll ? $gc_iStartBarWidth + 8 : 0)
-
-	For $i = 0 To $iVisible - 1
-		Local $iY = $gc_iStartTableTop + $i * $gc_iStartPitch
-		GUICtrlSetPos($g_aStartPath[$i], $gc_iStartPathLeft, $iY + 4, $iPathWidth, 16)
-		_StartShow(True, $g_aStartIcon[$i], $g_aStartName[$i], $g_aStartPath[$i])
+	For $i = 0 To $gc_iStartMaxRows - 1
+		_StartShow($i < $iVisible, $g_aStartIcon[$i], $g_aStartName[$i], $g_aStartPath[$i])
 	Next
 
-	If $bScroll Then
-		GUICtrlSetPos($g_iStartTrack, $gc_iPopupWidth - $gc_iPad - $gc_iStartBarWidth, $gc_iStartTableTop, _
-				$gc_iStartBarWidth, $iVisible * $gc_iStartPitch)
-		_StartShow(True, $g_iStartTrack, $g_iStartThumb)
-	EndIf
-
 	$g_iStartSlots = $iVisible
-	_StartResize($gc_iStartTableTop + $iVisible * $gc_iStartPitch + 18)
+	$g_iStartPathWidth = 0
+	_StartFitColumns()
+	_StartResize(_StartBtnTop())
 	_StartRedraw()
 EndFunc   ;==>_StartHolders
+
+
+; Полоса прокрутки и колонка пути под нынешнее число строк: пока ждём ответа, держателей
+; может стать больше, чем мест, при разблокировке - меньше. С полосой колонка ужимается,
+; чтобы не лезть под неё. Без перемен ничего не двигаем - метки моргали бы каждый круг.
+Func _StartFitColumns()
+	Local $bScroll = UBound($g_aStartRows) > $g_iStartSlots
+	Local $iPathWidth = $gc_iPopupWidth - $gc_iStartPathLeft - $gc_iPad - ($bScroll ? $gc_iStartBarWidth + 8 : 0)
+	If $iPathWidth = $g_iStartPathWidth Then Return
+	$g_iStartPathWidth = $iPathWidth
+
+	For $i = 0 To $g_iStartSlots - 1
+		GUICtrlSetPos($g_aStartPath[$i], $gc_iStartPathLeft, $gc_iStartTableTop + $i * $gc_iStartPitch + 4, $iPathWidth, 16)
+	Next
+
+	If $bScroll Then GUICtrlSetPos($g_iStartTrack, $gc_iPopupWidth - $gc_iPad - $gc_iStartBarWidth, _
+			$gc_iStartTableTop, $gc_iStartBarWidth, $g_iStartSlots * $gc_iStartPitch)
+	_StartShow($bScroll, $g_iStartTrack, $g_iStartThumb)
+EndFunc   ;==>_StartFitColumns
+
+
+; Верх кнопок под таблицей. Строк нет - как в вопросе о версии, от подстрочника.
+Func _StartBtnTop()
+	If $g_iStartSlots = 0 Then Return $gc_iStartAskTop
+	Return $gc_iStartTableTop + $g_iStartSlots * $gc_iStartPitch + 18
+EndFunc   ;==>_StartBtnTop
 
 
 ; Растит окно под кнопки на $iBtnTop, сохраняя центр: рост только вниз увёл бы окно
@@ -310,13 +334,15 @@ Func _StartScroll($iStep)
 EndFunc   ;==>_StartScroll
 
 
-; Новый список во время разблокировки: строки тают, прокрутка не должна повиснуть за концом
+; Новый список: при разблокировке строки тают, при опросе ещё и прибывают.
+; Прокрутка не должна повиснуть за концом.
 Func _StartSetRows($aRows)
 	$g_aStartRows = $aRows
 
 	Local $iMax = UBound($g_aStartRows) - $g_iStartSlots
 	If $g_iStartRow > $iMax Then $g_iStartRow = ($iMax > 0) ? $iMax : 0
 
+	_StartFitColumns()
 	_StartRedraw()
 EndFunc   ;==>_StartSetRows
 
@@ -324,22 +350,23 @@ EndFunc   ;==>_StartSetRows
 ; Состояния списка держателей: таблица и жёлтый заголовок на месте, меняются
 ; подстрочник и кнопки. На 'разблокируем' заголовок не переписываем - это только дёргает глаз.
 Func _StartMode($sMode, $sSub = "")
-	Local $iBtnTop = $gc_iStartTableTop + $g_iStartSlots * $gc_iStartPitch + 18
+	$g_sStartMode = $sMode
+	Local $iBtnTop = _StartBtnTop()
 
 	Switch $sMode
 		Case "ask"
 			_StartState($gc_sStartLocked, _
-					($sSub <> "") ? $sSub : "Закрыть принудительно процессы и разблокировать папку?", $gc_iClrWarn)
+					($sSub <> "") ? $sSub : "Закрыть принудительно процессы и разблокировать папку?", $g_iFluentWarn)
 			_StartButtons("Разблокировать и обновить", "Отмена", $iBtnTop)
 
 		Case "closing"
 			_StartState($gc_sStartLocked, _
-					($sSub <> "") ? $sSub : "Осталось процессов: " & _StartProcessCount(), $gc_iClrWarn)
+					($sSub <> "") ? $sSub : "Осталось процессов: " & _StartProcessCount(), $g_iFluentWarn)
 			_StartButtons("", "Отмена", $iBtnTop)
 
 		Case "fail"
 			_StartState("Не удалось освободить папку", _
-					($sSub <> "") ? $sSub : "Эти процессы не закрылись даже принудительно", $gc_iClrWarn)
+					($sSub <> "") ? $sSub : "Эти процессы не закрылись даже принудительно", $g_iFluentWarn)
 			_StartButtons("Повторить", "Отмена", $iBtnTop)
 	EndSwitch
 EndFunc   ;==>_StartMode
@@ -358,58 +385,101 @@ EndFunc   ;==>_StartProcessCount
 
 ; Кнопки состояния. Пустая главная - выбора нет, остаётся одна 'Отмена'.
 Func _StartButtons($sMain, $sAlt, $iTop)
-	GUICtrlSetData($g_iStartBtnAlt, $sAlt)
+	_SetButtonText($g_iStartBtnAlt, $sAlt)
 	GUICtrlSetState($g_iStartBtnAlt, $GUI_SHOW)
 
 	If $sMain = "" Then
 		GUICtrlSetState($g_iStartBtnMain, $GUI_HIDE)
 		_PlaceButtons($gc_iPopupWidth - $gc_iPad, $iTop, $g_iStartBtnAlt)
 	Else
-		GUICtrlSetData($g_iStartBtnMain, $sMain)
+		_SetButtonText($g_iStartBtnMain, $sMain)
 		GUICtrlSetState($g_iStartBtnMain, $GUI_SHOW)
 		_PlaceButtons($gc_iPopupWidth - $gc_iPad, $iTop, $g_iStartBtnMain, $g_iStartBtnAlt)
 	EndIf
-
-	_UpdateHover($g_hStart, True)
 EndFunc   ;==>_StartButtons
 
 
 ; Итог и закрытие окна: строка сверху, пояснение снизу и пауза, чтобы успеть прочесть.
 ; Возвращает '', чтобы вызывающий писал 'Return _StartDone(...)'.
-Func _StartDone($sLog, $sTitle, $sSub, $iWait = 2200, $iColor = $gc_iClrWarn)
+Func _StartDone($sLog, $sTitle, $sSub, $iWait = 2200, $iColor = Default)
 	If $sLog <> "" Then _Util_Log($sLog)
+	If $iColor = Default Then $iColor = $g_iFluentWarn
 
 	_StartState($sTitle, $sSub, $iColor)
-	_Wait($iWait, $g_hStart)
+	_Wait($iWait)
 	Return _StartClose()
 EndFunc   ;==>_StartDone
 
 
-; Ждёт ответа. 1 - главная кнопка, 2 - отказ или крестик.
-Func _StartWait()
+; Ждёт ответа. 1 - главная кнопка, 2 - отказ или крестик, 3 - спрашивать больше не о чем:
+; $sPoll, который зовётся раз в $gc_iStartPoll, ответил True.
+Func _StartWait($sPoll = "")
 	$g_iChoice = 0
 	$g_bCancel = False
+	Local $iTimer = TimerInit()
 	While $g_iChoice = 0 And Not $g_bCancel
 		Sleep(30)
-		_UpdateHover($g_hStart)
+		If $sPoll = "" Or TimerDiff($iTimer) < $gc_iStartPoll Then ContinueLoop
+
+		If Call($sPoll) Then Return 3
+		$iTimer = TimerInit()
 	WEnd
 
 	Return $g_bCancel ? 2 : $g_iChoice
 EndFunc   ;==>_StartWait
 
 
+; Вопрос над таблицей держателей. Пока человек думает, таблица следит за процессами:
+; он мог закрыть редактор сам или открыть ещё один.
 Func _StartAsk($sMode)
 	_StartMode($sMode)
-	Return _StartWait()
+	Return _StartWait("_StartPollHolders")
 EndFunc   ;==>_StartAsk
+
+
+; Сверка таблицы с живыми держателями. True - папку отпустили, разблокировать нечего.
+; Решает проба, а не пустой список: у кого LockHunter закрыл рабочий каталог, тот жив и в
+; списке значится, но папку не держит. Перерисовываем только при переменах, иначе метки
+; моргали бы раз в две секунды.
+Func _StartPollHolders()
+	If _FolderIsFree($g_sTargetPath) Then Return True
+
+	Local $aBusy = _FolderHolders($g_sTargetPath)
+
+	Local $aRows = _FolderRows($aBusy)
+	If _StartRowsKey($aRows) = _StartRowsKey($g_aStartRows) Then Return False
+
+	_Util_Log("Держатели папки изменились: " & ((UBound($aBusy) = 0) ? "не видно ни одного" : _FolderNames($aBusy)))
+
+	; В окне без строк новым держателям негде встать - разворачиваем таблицу, кнопки - под неё
+	If $g_iStartSlots = 0 And UBound($aRows) > 0 Then
+		_StartHolders($aRows)
+		_StartMode($g_sStartMode)
+	Else
+		_StartSetRows($aRows)
+	EndIf
+
+	Return False
+EndFunc   ;==>_StartPollHolders
+
+
+; Строки таблицы одной строкой - чтобы сравнить два списка разом
+Func _StartRowsKey($aRows)
+	Local $sKey = ""
+	For $i = 0 To UBound($aRows) - 1
+		$sKey &= $aRows[$i][0] & "|" & $aRows[$i][1] & "|" & $aRows[$i][3] & @LF
+	Next
+
+	Return $sKey
+EndFunc   ;==>_StartRowsKey
 
 
 ; Закрывает окно и отдаёт готовый ответ дальше по сценарию
 Func _StartClose($vResult = "")
 	If $g_hStart = 0 Then Return $vResult
 
-	GUIRegisterMsg($WM_MOUSEWHEEL, "")
-	_HotBtnForget($g_iStartBtnMain, $g_iStartBtnAlt)
+	_FluentMsg_Unregister($WM_MOUSEWHEEL, "_OnStartWheel")
+	_DarkButtonDelete($g_iStartBtnMain, $g_iStartBtnAlt)
 	GUIDelete($g_hStart)
 
 	$g_hStart = 0
@@ -422,7 +492,6 @@ Func _StartClose($vResult = "")
 	ReDim $g_aStartName[0]
 	ReDim $g_aStartPath[0]
 	ReDim $g_aStartIconSrc[0]
-	_UpdateHover(0, True)
 
 	Return $vResult
 EndFunc   ;==>_StartClose
@@ -461,9 +530,8 @@ Func _OnStartLeft($aLeft)
 EndFunc   ;==>_OnStartLeft
 
 
-; Колбэк отмены. Заодно держит подсветку кнопок во время разблокировки
+; Колбэк отмены разблокировки
 Func _StartAborted()
-	_UpdateHover($g_hStart)
 	Return $g_bCancel
 EndFunc   ;==>_StartAborted
 
@@ -478,28 +546,25 @@ Func _AskAndFreeFolder()
 		Return False
 	EndIf
 
+	If _FolderIsFree($g_sTargetPath) Then Return True
 	Local $aBusy = _FolderHolders($g_sTargetPath)
-	If UBound($aBusy) = 0 And _FolderIsFree($g_sTargetPath) Then Return True
 
+	; Держателя может быть не видно (проводник, индексатор) - LockHunter снимет и его
 	_StartLocked()
-
-	; Держат, а держателя не видно: закрывать нечего
-	If UBound($aBusy) = 0 Then
-		_Util_Log("ОТКАЗ: папку удерживает неопознанная программа")
-		_StartState($gc_sStartLocked, "Её удерживает программа, которую не видно", $gc_iClrWarn)
-		_StartShow(True, $g_iStartBarBg, $g_iStartBar)
-		_Wait(2600, $g_hStart)
-		Return False
-	EndIf
-
-	_Util_Log("Папка занята процессами " & _FolderNames($aBusy))
+	_Util_Log("Папка занята: " & ((UBound($aBusy) = 0) ? "держателя не видно" : _FolderNames($aBusy)))
 	_StartHolders(_FolderRows($aBusy))
 
+	Local $sMode = "ask"
 	While 1
-		If _StartAsk("ask") = 2 Then
-			_Util_Log("Пользователь отказался закрывать программы")
-			Return False
-		EndIf
+		; Повтор после отказа имеет смысл: файл могли держать на секунду дольше остальных
+		Switch _StartAsk($sMode)
+			Case 2
+				_Util_Log(($sMode = "ask") ? "Пользователь отказался закрывать программы" : "Разблокировка брошена после отказа")
+				Return False
+			Case 3
+				_Util_Log("Папку отпустили, пока ждали ответа, обновление продолжается")
+				Return True
+		EndSwitch
 
 		_StartMode("closing")
 		If _FolderRelease($g_sTargetPath, "_OnStartLeft", "_StartAborted") Then
@@ -512,8 +577,7 @@ Func _AskAndFreeFolder()
 			Return False
 		EndIf
 
-		; Повтор имеет смысл: файл могли держать на секунду дольше остальных
 		_Util_Log("Освободить папку не удалось, осталось " & UBound($g_aStartRows) & " строк")
-		If _StartAsk("fail") = 2 Then Return False
+		$sMode = "fail"
 	WEnd
 EndFunc   ;==>_AskAndFreeFolder

@@ -2,10 +2,10 @@
 #pragma compile(Icon, Assets\Icons\Icon.ico)
 #pragma compile(ProductName, VSCodePUPD)
 #pragma compile(FileDescription, Updater for portable VS Code)
-#pragma compile(FileVersion, 1.0.3.0)
 #pragma compile(x64, true)
 
 #NoTrayIcon
+#RequireAdmin
 
 #include <GUIConstantsEx.au3>
 #include <MsgBoxConstants.au3>
@@ -89,7 +89,7 @@ Func _RunLauncherFlow()
 	_Util_Log("Сервер предлагает " & $g_sVerNew)
 
 	If _CompareVersions($g_sVerNew, $g_sVerCur) <= 0 Then Return _StartDone("", _
-			"У вас установлена последняя версия " & $g_sVerCur, "Запуск VS Code...", 100, $gc_iClrText)
+			"У вас установлена последняя версия " & $g_sVerCur, "Запуск VS Code...", 100, $g_iFluentText1)
 
 	; Свой же процесс не дал бы удалить папку, в которой лежит программа
 	If _Util_IsInsidePath(@ScriptDir, $g_sTargetPath) Then Return _StartDone( _
@@ -170,12 +170,13 @@ Func _RunUpdateOnce()
 	_SetStep($g_iStepDownload, "done", $g_sDownloadSummary)
 	_Util_Log("Архив загружен и проверен: " & $g_sDownloadSummary)
 
-	; За минуты загрузки редактор могли запустить снова. Как и в первом окне,
-	; списка процессов мало - точный ответ даёт проба переименованием.
-	If FileExists($g_sTargetPath) Then
+	; За минуты загрузки редактор могли запустить снова. Как и в первом окне, ответ даёт
+	; только проба переименованием: процесс, у которого LockHunter закрыл рабочий каталог,
+	; жив и по-прежнему значится в списке, но папку уже не держит.
+	If FileExists($g_sTargetPath) And Not _FolderIsFree($g_sTargetPath) Then
 		Local $aBusy = _FolderHolders($g_sTargetPath)
-		If UBound($aBusy) Or Not _FolderIsFree($g_sTargetPath) Then Return _FailStep($g_iStepRemove, _
-				"Папка VS Code занята", UBound($aBusy) ? "закройте: " & _FolderNames($aBusy) : "её удерживает программа, которую не видно")
+		Return _FailStep($g_iStepRemove, "Папка VS Code занята", _
+				UBound($aBusy) ? "закройте: " & _FolderNames($aBusy) : "её удерживает программа, которую не видно")
 	EndIf
 
 	; Дальше отменять нельзя: папки начинают переезжать
@@ -249,7 +250,7 @@ Func _RunUpdateOnce()
 	$g_sVerCur = $sVerAfter
 	_Util_Log("ГОТОВО: обновлено до " & $sVerAfter)
 
-	_Wait(1200, $g_hMain)
+	_Wait(1200)
 	Return False
 EndFunc   ;==>_RunUpdateOnce
 
@@ -266,9 +267,8 @@ Func _SetupGUI()
 
 	$g_hSetup = GUICreate($gc_sTitle & " - Первый запуск", $iWidth, 600, -1, -1, _
 			BitOR($WS_POPUP, $WS_CAPTION, $WS_SYSMENU), $WS_EX_TOPMOST)
-	GUISetBkColor($gc_iClrBg, $g_hSetup)
 	GUISetFont($gc_nFontBody, 400, 0, "Segoe UI", $g_hSetup)
-	_GUISetDarkTitleBar($g_hSetup)
+	_DarkWindowInit($g_hSetup)
 
 	Local $aLines[0][2] ; [ControlID, текст] - по ним считаем ширину окна
 	Local $iY = $gc_iPad
@@ -288,18 +288,15 @@ Func _SetupGUI()
 	$iY = _SetupBlock($aLines, "Насколько это безопасно", $aSafe, $iY + 10) + 18
 
 	; --- Папка VS Code ---
-	_SetupAddLine($aLines, _DarkLabel("Папка VS Code", $gc_iPad, $iY, 400, 20, $gc_iClrText), "Папка VS Code")
+	_SetupAddLine($aLines, _DarkLabel("Папка VS Code", $gc_iPad, $iY, 400, 20, $g_iFluentText1), "Папка VS Code")
 	$iY += 24
 
-	$g_iSetupInput = GUICtrlCreateInput($g_sTargetPath, $gc_iPad, $iY, 100, $gc_iBtnHeight)
-	GUICtrlSetBkColor($g_iSetupInput, 0x2D2D2D)
-	GUICtrlSetColor($g_iSetupInput, $gc_iClrText)
-	GUICtrlSetFont($g_iSetupInput, $gc_nFontBody, 400, 0, "Segoe UI")
+	$g_iSetupInput = _FluentInput_Create($gc_iPad, $iY, 100, $gc_iBtnHeight)
 	$g_iSetupBrowse = _DarkButton("Обзор...", $gc_iPad, $iY) ; к правому краю после замера
 	Local $iInputTop = $iY
 	$iY += $gc_iBtnHeight + 14
 
-	$g_iSetupData = _DarkLabel("", $gc_iPad, $iY, 600, 20, $gc_iClrText)
+	$g_iSetupData = _DarkLabel("", $gc_iPad, $iY, 600, 20, $g_iFluentText1)
 	$iY += 20 + 16
 
 	$g_iSetupSave = _DarkButton("Применить", $gc_iPad, $iY, True)
@@ -326,8 +323,10 @@ Func _SetupGUI()
 		GUICtrlSetPos($aLines[$i][0], $gc_iPad, $aPos[1], $iTextWidth, $aPos[3])
 	Next
 
-	GUICtrlSetPos($g_iSetupInput, $gc_iPad, $iInputTop, $iTextWidth - $gc_iBtnMinWidth - $gc_iBtnGap, $gc_iBtnHeight)
-	GUICtrlSetPos($g_iSetupBrowse, $iWidth - $gc_iPad - $gc_iBtnMinWidth, $iInputTop, $gc_iBtnMinWidth, $gc_iBtnHeight)
+	_FluentInput_SetPos($g_iSetupInput, $gc_iPad, $iInputTop, $iTextWidth - $gc_iBtnMinWidth - $gc_iBtnGap, $gc_iBtnHeight)
+	; Путь - когда поле уже во всю ширину: в узком Edit прокрутился бы к концу и так остался
+	GUICtrlSetData($g_iSetupInput, $g_sTargetPath)
+	_FluentButton_SetPos($g_iSetupBrowse, $iWidth - $gc_iPad - $gc_iBtnMinWidth, $iInputTop, $gc_iBtnMinWidth, $gc_iBtnHeight)
 	_PlaceButtons($iWidth - $gc_iPad, $iY, $g_iSetupSave, $g_iSetupCancel)
 
 	GUISetOnEvent($GUI_EVENT_CLOSE, "_OnEvent_SetupCancel", $g_hSetup)
@@ -336,6 +335,7 @@ Func _SetupGUI()
 	GUICtrlSetOnEvent($g_iSetupCancel, "_OnEvent_SetupCancel")
 
 	_SetupRefresh()
+	_DarkWindowApply($g_hSetup)
 	GUISetState(@SW_SHOW, $g_hSetup)
 
 	; Вписанный руками путь Input событием не сообщает - следим сами
@@ -343,7 +343,6 @@ Func _SetupGUI()
 	$g_iChoice = 0
 	While $g_iChoice = 0
 		Sleep(30)
-		_UpdateHover($g_hSetup)
 		Local $sNow = GUICtrlRead($g_iSetupInput)
 		If $sNow <> $sLast Then
 			$sLast = $sNow
@@ -357,14 +356,14 @@ Func _SetupGUI()
 		IniWrite($gc_sIniFile, "Paths", "TargetPath", $g_sTargetPath)
 	EndIf
 
-	_HotBtnForget($g_iSetupBrowse, $g_iSetupSave, $g_iSetupCancel)
+	_FluentInput_Delete($g_iSetupInput)
+	_DarkButtonDelete($g_iSetupBrowse, $g_iSetupSave, $g_iSetupCancel)
 	GUIDelete($g_hSetup)
 
 	$g_hSetup = 0
 	$g_iSetupBrowse = 0
 	$g_iSetupSave = 0
 	$g_iSetupCancel = 0
-	_UpdateHover(0, True)
 
 	Return $bSaved
 EndFunc   ;==>_SetupGUI
@@ -373,12 +372,12 @@ EndFunc   ;==>_SetupGUI
 ; Блок 'заголовок + строки пояснения'. Возвращает Y под блоком.
 Func _SetupBlock(ByRef $aLines, $sTitle, ByRef $aText, $iY)
 	GUISetFont($gc_nFontBody, 600, 0, "Segoe UI", $g_hSetup)
-	_SetupAddLine($aLines, _DarkLabel($sTitle, $gc_iPad, $iY, 400, 20, $gc_iClrText), $sTitle)
+	_SetupAddLine($aLines, _DarkLabel($sTitle, $gc_iPad, $iY, 400, 20, $g_iFluentText1), $sTitle)
 	$iY += 24
 
 	GUISetFont($gc_nFontBody, 400, 0, "Segoe UI", $g_hSetup)
 	For $i = 0 To UBound($aText) - 1
-		_SetupAddLine($aLines, _DarkLabel($aText[$i], $gc_iPad, $iY, 400, 18, $gc_iClrDim, -1, $gc_nFontCaption), $aText[$i])
+		_SetupAddLine($aLines, _DarkLabel($aText[$i], $gc_iPad, $iY, 400, 18, $g_iFluentText3, -1, $gc_nFontCaption), $aText[$i])
 		$iY += 18
 	Next
 
@@ -401,14 +400,14 @@ Func _SetupRefresh()
 
 	If Not _IsVSCodeFolder($sPath) Then
 		GUICtrlSetData($g_iSetupData, "Code.exe в этой папке не найден")
-		GUICtrlSetColor($g_iSetupData, $gc_iClrWarn)
+		GUICtrlSetColor($g_iSetupData, $g_iFluentWarn)
 		_SetButtonEnabled($g_iSetupSave, False)
 		Return
 	EndIf
 
 	Local $aData = _DetectDataPath($sPath)
 	GUICtrlSetData($g_iSetupData, _FitPath($g_iSetupData, $aData[0], $gc_sDataPrefix))
-	GUICtrlSetColor($g_iSetupData, $gc_iClrText)
+	GUICtrlSetColor($g_iSetupData, $g_iFluentText1)
 
 	_SetButtonEnabled($g_iSetupSave, True)
 EndFunc   ;==>_SetupRefresh
@@ -583,7 +582,6 @@ EndFunc   ;==>_OnHashProgress
 
 
 Func _IsAborted()
-	_UpdateHover($g_hMain)
 	Return $g_bCancel
 EndFunc   ;==>_IsAborted
 
